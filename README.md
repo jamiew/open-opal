@@ -162,8 +162,10 @@ for distance-based falloff.
 
 Open Opal installs a CoreMediaIO system extension that publishes **"Open Opal
 Camera"** to every app on the Mac — Zoom, Meet, FaceTime, anything. It carries
-the processed image, blur and all. When the app isn't running it shows a placard
-rather than a frozen frame.
+the processed image, background blur included. When the app isn't running it
+shows a camera-off symbol rather than a frozen frame. The fallback contains no
+text, so it stays understandable in mirrored self-views and in the normal video
+other participants receive.
 
 Virtual-camera output is always 1920×1080 BGRA, matching the extension's
 advertised format. Other input sizes are scaled to fit with black bars rather
