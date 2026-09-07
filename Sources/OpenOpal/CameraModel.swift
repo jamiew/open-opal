@@ -17,8 +17,10 @@ final class CameraModel {
     /// feeder polls for the device — the extension may activate minutes after
     /// install, or already be running from a previous launch.
     let installer = ExtensionInstaller()
+    let autoLaunch = AutoLaunchController()
     let feeder = VirtualCameraFeeder()
     private var feederPollStarted = false
+    private var isStarting = false
 
     /// The freshest rendered texture, handed to the preview each vsync.
     private(set) var latestTexture: MTLTexture?
@@ -75,8 +77,10 @@ final class CameraModel {
     private var started = false
 
     func start() async {
-        guard !started else { return }
+        guard !started, !isStarting, !isRebooting, !device.state.isLive else { return }
         started = true
+        isStarting = true
+        defer { isStarting = false }
         if renderer == nil, let r = BokehRenderer() {
             if let mtl = MTLCreateSystemDefaultDevice() {
                 // The depth model is loaded lazily — it's 50MB and, in the default
@@ -166,6 +170,7 @@ final class CameraModel {
     }
 
     func reconnect() async {
+        guard !isStarting, !isRebooting else { return }
         resetFocusTracking()
         isRebooting = true
         defer { isRebooting = false }
@@ -309,6 +314,7 @@ final class CameraModel {
 
     /// Cold settings changed; reboot the pipeline to pick them up.
     func applyColdChanges() async {
+        guard !isStarting, !isRebooting else { return }
         isRebooting = true
         defer { isRebooting = false }
         await device.rebuildPipeline(settings: settings)

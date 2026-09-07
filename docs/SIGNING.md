@@ -59,6 +59,16 @@ The release script builds, embeds profiles, and signs the app. Run:
 ./scripts/release.sh     # build -> sign -> notarize -> staple -> /Applications
 ```
 
+## Automatic startup helper
+
+The optional auto-start helper is built into
+`Contents/Library/LoginItems/OpenOpalLauncher.app` and signed before the host.
+It needs no restricted entitlements or separate provisioning profile. It is
+registered with `SMAppService` only when the user enables automatic startup.
+
+When changing the app's bundle ID in `project.yml`, also set the launcher's
+bundle ID to the app's bundle ID plus `.launcher`.
+
 ## Things that will waste your day
 
 macOS reports most of these as **"Extension not found in App bundle"**,
