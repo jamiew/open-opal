@@ -68,7 +68,15 @@ final class CameraModel {
     /// make auto-exposure visibly pump.
     private var lastMeteredRect: CGRect?
 
+    /// Both scenes (the window and the menu bar flyout) call this, and either
+    /// may appear first. Connecting twice would tear down a live session, so
+    /// the first caller wins and the rest are no-ops.
+    private var started = false
+
     func start() async {
+        if started { return }
+        started = true
+
         if renderer == nil, let r = BokehRenderer() {
             if let mtl = MTLCreateSystemDefaultDevice() {
                 // The depth model is loaded lazily — it's 50MB and, in the default
@@ -149,7 +157,10 @@ final class CameraModel {
         await device.connect(settings: settings)
     }
 
-    func stop() { device.disconnect() }
+    func stop() {
+        started = false
+        device.disconnect()
+    }
 
     func reconnect() async {
         isRebooting = true
