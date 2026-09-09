@@ -48,6 +48,20 @@ jobs:
         if: steps.cache-depthai.outputs.cache-hit != 'true'
         run: ./scripts/bootstrap.sh
 
+      # The app bundles a Core ML depth model that Models/ does not carry -- it
+      # is gitignored at ~50MB. Cache it on the script's hash, since that pins
+      # which model and variant gets fetched.
+      - name: Cache the Core ML model
+        id: cache-models
+        uses: actions/cache@v4
+        with:
+          path: Models
+          key: models-${{ hashFiles('scripts/fetch-models.sh') }}
+
+      - name: Fetch the Core ML model
+        if: steps.cache-models.outputs.cache-hit != 'true'
+        run: ./scripts/fetch-models.sh
+
       # Builds bridge_test and region_test, which the app target does not. They
       # need real hardware to run, but compiling them keeps the test sources
       # honest — a stale path here is exactly the bug this catches.
