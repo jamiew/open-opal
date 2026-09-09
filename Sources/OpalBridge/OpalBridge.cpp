@@ -172,9 +172,16 @@ int opal_list_devices(OpalDeviceInfo* out, int maxCount) {
             info.state  = mapState(d.state);
             // FLASH_BOOTED (stock UVC firmware) and UNBOOTED are both openable;
             // we reboot the device with our pipeline either way.
+            // X_LINK_BOOTED is the first-generation (IMX378) C1 running its
+            // flashed camera firmware. depthai's getAllAvailableDevices()
+            // filters that state out as "in use by someone else", which is why
+            // these cameras look invisible. They are not: prepareLegacyDevice()
+            // walks them to the ROM bootloader, after which they are ordinary
+            // unbooted devices.
             info.usable = (d.state == X_LINK_FLASH_BOOTED ||
                            d.state == X_LINK_UNBOOTED ||
-                           d.state == X_LINK_BOOTLOADER);
+                           d.state == X_LINK_BOOTLOADER ||
+                           d.state == X_LINK_BOOTED);
             out[n++] = info;
         }
         return n;
@@ -182,6 +189,81 @@ int opal_list_devices(OpalDeviceInfo* out, int maxCount) {
         setError(e.what());
         return 0;
     }
+}
+
+
+// Walk a first-generation C1 from its flashed camera firmware to the Myriad ROM
+// bootloader, leaving it in the ordinary X_LINK_UNBOOTED state depthai knows
+// how to boot. Opal's own app does exactly this on every launch:
+//
+//     f63b BOOTED  --0xF5/0x0DA1-->  f63c BOOTLOADER
+//                  --UsbRomBoot--->  2485 UNBOOTED
+//                  --firmware----->  running from RAM
+//
+// Two things make this easy to get wrong: the ROM window is only about two
+// seconds wide, and the device's USB address changes across each transition, so
+// every stage must re-enumerate rather than reuse a stale DeviceInfo. That
+// address change is why a naive attempt fails with X_LINK_DEVICE_NOT_FOUND.
+//
+// Nothing is written to flash. A power cycle restores the stock firmware.
+static bool findDeviceInState(XLinkDeviceState_t want, const std::string& mxid,
+                              dai::DeviceInfo& out, double timeoutSeconds) {
+    auto deadline = std::chrono::steady_clock::now()
+                  + std::chrono::milliseconds((long)(timeoutSeconds * 1000));
+    while(std::chrono::steady_clock::now() < deadline) {
+        // Re-enumerate every pass: the USB path is not stable across a reboot.
+        for(const auto& d : dai::XLinkConnection::getAllConnectedDevices()) {
+            if(d.state != want) continue;
+            if(!mxid.empty() && d.getMxId() != mxid) continue;
+            out = d;
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(40));
+    }
+    return false;
+}
+
+static bool prepareLegacyDevice(const std::string& mxid, dai::DeviceInfo& unbooted) {
+    dai::DeviceInfo booted;
+    if(!findDeviceInState(X_LINK_BOOTED, mxid, booted, 1.0)) return false;
+
+    bootLog("first-generation C1 in camera mode - walking it to the ROM bootloader");
+
+    // Stage 1: jump the running firmware into its DepthAI bootloader.
+    try {
+        dai::XLinkConnection::bootBootloader(booted);
+    } catch(const std::exception& e) {
+        // XLink ignores this control transfer's result too; the device leaves
+        // the bus either way. Only a missing device downstream is fatal.
+        bootLog(std::string("bootBootloader returned: ") + e.what());
+    }
+
+    dai::DeviceInfo bl;
+    if(!findDeviceInState(X_LINK_BOOTLOADER, mxid, bl, 20.0)) {
+        setError("camera never reached the bootloader after the jump packet");
+        return false;
+    }
+    bootLog("bootloader reached - requesting USB ROM boot");
+
+    // Stage 2: hand off to the Myriad ROM. These cameras report bootloader
+    // version 0.0.0 while still servicing requests that nominally need more,
+    // so depthai's client-side version check must tolerate 0.0.0 here.
+    try {
+        dai::DeviceBootloader loader(bl, false);
+        loader.bootUsbRomBootloader();
+    } catch(const std::exception& e) {
+        setError(std::string("USB ROM boot failed: ") + e.what());
+        return false;
+    }
+
+    // Stage 3: catch the ROM. Match on state alone - the ROM bootloader does
+    // not necessarily report the same id as the running firmware.
+    if(!findDeviceInState(X_LINK_UNBOOTED, "", unbooted, 25.0)) {
+        setError("camera never re-enumerated as an unbooted device");
+        return false;
+    }
+    bootLog("ROM bootloader reached - handing off to depthai");
+    return true;
 }
 
 OpalDeviceHandle* opal_open(const char* mxid, OpalPipelineConfig cfg,
@@ -277,7 +359,18 @@ OpalDeviceHandle* opal_open(const char* mxid, OpalPipelineConfig cfg,
         bool found = false;
         try {
             if(mxid && mxid[0]) {
-                for(const auto& info : dai::Device::getAllAvailableDevices()) {
+                // A first-generation C1 sits in X_LINK_BOOTED, which
+                // getAllAvailableDevices() does not return. Walk it to the ROM
+                // bootloader first; after that it enumerates as an ordinary
+                // unbooted device and the normal path below picks it up.
+                dai::DeviceInfo prepared;
+                if(prepareLegacyDevice(std::string(mxid), prepared)) {
+                    bootLog("target: legacy C1 - booting firmware into VPU RAM");
+                    dev = std::make_unique<dai::Device>(pipeline, prepared, dai::UsbSpeed::SUPER_PLUS);
+                    found = true;
+                }
+                for(const auto& info : found ? std::vector<dai::DeviceInfo>{}
+                                             : dai::Device::getAllAvailableDevices()) {
                     if(info.getMxId() == std::string(mxid)) {
                         bootLog(std::string("target: mxid ") + mxid + " · resetting VPU, uploading firmware over XLink");
                         dev = std::make_unique<dai::Device>(pipeline, info, dai::UsbSpeed::SUPER_PLUS);
