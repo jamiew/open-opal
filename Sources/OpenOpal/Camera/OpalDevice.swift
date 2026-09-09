@@ -157,12 +157,21 @@ final class OpalDevice {
         // a single attempt isn't enough — retry a few times before giving up.
         let args = OpenArgs(cfg: cfg, ctx: ctx)
 
+        let tuningBlob = Self.discoverTuningBlob()
+        if let tuningBlob { log.info("tuning blob: \(tuningBlob, privacy: .public)") }
+
         var opened: OpaquePointer?
         var lastError = ""
         for attempt in 1...4 {
             opened = await Task.detached(priority: .userInitiated) {
-                HandleBox(mxid.withCString {
-                    opal_open($0, args.cfg, opalFrameTrampoline, args.ctx)
+                // Both C strings must outlive the call, so the closures nest
+                // rather than letting a withCString pointer escape.
+                HandleBox(mxid.withCString { mx in
+                    withOptionalCString(tuningBlob) { blob in
+                        var cfg = args.cfg
+                        cfg.tuningBlobPath = blob
+                        return opal_open(mx, cfg, opalFrameTrampoline, args.ctx)
+                    }
                 })
             }.value.handle
             if opened != nil { break }
@@ -204,6 +213,38 @@ final class OpalDevice {
         disconnect()
         await connect(settings: settings)
         settings.coldDirty = false
+    }
+
+    /// Locate a vendor ISP tuning blob, or nil for DepthAI's defaults.
+    ///
+    /// The blob is the ISP's calibration for one sensor and lens — metering
+    /// curves, colour matrices, noise handling — and it is where most of the
+    /// difference in auto-exposure and auto-white-balance behaviour lives.
+    ///
+    /// Deliberately not bundled: these files belong to the camera vendor, so
+    /// this finds one you already have rather than shipping a copy.
+    static func discoverTuningBlob() -> String? {
+        let fm = FileManager.default
+        var candidates: [String] = []
+
+        // Anything you placed yourself wins over an auto-discovered copy.
+        if let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            let dir = support.appendingPathComponent("OpenOpal/tuning", isDirectory: true)
+            if let found = try? fm.contentsOfDirectory(atPath: dir.path) {
+                candidates += found.filter { $0.hasSuffix(".bin") }.sorted()
+                                   .map { dir.appendingPathComponent($0).path }
+            }
+        }
+
+        // An installed vendor app. The blob moved into the XPC service's own
+        // Resources in later builds, so both locations are checked.
+        let vendor = "/Applications/Opal.app/Contents"
+        for name in ["Opal_v0.12.bin", "Opal582_v2.bin"] {
+            candidates.append("\(vendor)/XPCServices/OpalCameraDeviceService.xpc/Contents/Resources/\(name)")
+            candidates.append("\(vendor)/Resources/\(name)")
+        }
+
+        return candidates.first { fm.isReadableFile(atPath: $0) }
     }
 
     // MARK: - Controls
@@ -471,4 +512,12 @@ private func opalFrameTrampoline(y: UnsafePointer<UInt8>?, yStride: Int,
     let sink = Unmanaged<FrameSink>.fromOpaque(ctx).takeUnretainedValue()
     sink.ingest(y: y, yStride: yStride, uv: uv, uvStride: uvStride,
                 width: Int(width), height: Int(height), latencyMs: latencyMs)
+}
+
+/// `withCString` for an optional path: passes NULL through rather than making
+/// every call site duplicate itself for the nil case.
+private func withOptionalCString<R>(_ s: String?,
+                                    _ body: (UnsafePointer<CChar>?) -> R) -> R {
+    guard let s else { return body(nil) }
+    return s.withCString { body($0) }
 }
