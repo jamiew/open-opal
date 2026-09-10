@@ -215,36 +215,42 @@ final class OpalDevice {
         settings.coldDirty = false
     }
 
-    /// Locate a vendor ISP tuning blob, or nil for DepthAI's defaults.
+    /// An ISP tuning blob to load, or nil for DepthAI's defaults.
     ///
     /// The blob is the ISP's calibration for one sensor and lens — metering
     /// curves, colour matrices, noise handling — and it is where most of the
     /// difference in auto-exposure and auto-white-balance behaviour lives.
     ///
-    /// Deliberately not bundled: these files belong to the camera vendor, so
-    /// this finds one you already have rather than shipping a copy.
+    /// Deliberately narrow. A blob fitted to one sensor is wrong for another,
+    /// and the sensor is not known until after the pipeline boots, so there is
+    /// no safe moment to guess. Rather than hunt for vendor files and pick by
+    /// filename — which hands an IMX582 owner the IMX378 calibration — this
+    /// reads only what you put here yourself:
+    ///
+    ///     ~/Library/Application Support/OpenOpal/tuning/
+    ///
+    /// One `.bin` is a clear instruction. Several is ambiguous, so the defaults
+    /// are used and the ambiguity is logged rather than resolved by guesswork.
     static func discoverTuningBlob() -> String? {
         let fm = FileManager.default
-        var candidates: [String] = []
+        guard let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        else { return nil }
 
-        // Anything you placed yourself wins over an auto-discovered copy.
-        if let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
-            let dir = support.appendingPathComponent("OpenOpal/tuning", isDirectory: true)
-            if let found = try? fm.contentsOfDirectory(atPath: dir.path) {
-                candidates += found.filter { $0.hasSuffix(".bin") }.sorted()
-                                   .map { dir.appendingPathComponent($0).path }
-            }
+        let dir = support.appendingPathComponent("OpenOpal/tuning", isDirectory: true)
+        guard let names = try? fm.contentsOfDirectory(atPath: dir.path) else { return nil }
+
+        let blobs = names.filter { $0.hasSuffix(".bin") }.sorted()
+            .map { dir.appendingPathComponent($0).path }
+            .filter { fm.isReadableFile(atPath: $0) }
+
+        switch blobs.count {
+        case 0: return nil
+        case 1: return blobs[0]
+        default:
+            Logger(subsystem: "com.openopal", category: "device").warning(
+                "\(blobs.count) tuning blobs in \(dir.path, privacy: .public); cannot tell which matches this camera, so using DepthAI defaults. Leave one.")
+            return nil
         }
-
-        // An installed vendor app. The blob moved into the XPC service's own
-        // Resources in later builds, so both locations are checked.
-        let vendor = "/Applications/Opal.app/Contents"
-        for name in ["Opal_v0.12.bin", "Opal582_v2.bin"] {
-            candidates.append("\(vendor)/XPCServices/OpalCameraDeviceService.xpc/Contents/Resources/\(name)")
-            candidates.append("\(vendor)/Resources/\(name)")
-        }
-
-        return candidates.first { fm.isReadableFile(atPath: $0) }
     }
 
     // MARK: - Controls
