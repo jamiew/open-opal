@@ -10,6 +10,7 @@ import SwiftUI
 struct MenuBarFlyout: View {
     @Environment(CameraModel.self) private var camera
     @Binding var menuBarMode: Bool
+    @Environment(\.openWindow) private var openWindow
 
     /// Wide enough for the inspector's controls to keep their labels on one
     /// line, narrow enough to sit under a status item without dominating the
@@ -46,12 +47,27 @@ struct MenuBarFlyout: View {
         }
         .frame(width: Self.width)
         .task { await camera.start() }
-        // LSUIElement is baked into Info.plist at build time, so the Dock icon
-        // has to be switched at runtime instead. .accessory hides the icon and
-        // the main window; .regular brings both back.
-        .onChange(of: menuBarMode, initial: true) { _, hideDock in
-            NSApp.setActivationPolicy(hideDock ? .accessory : .regular)
-            if !hideDock { NSApp.activate(ignoringOtherApps: true) }
+        .onChange(of: menuBarMode, initial: true) { _, on in
+            Self.apply(menuBarMode: on, openWindow: openWindow)
+        }
+    }
+
+    /// Switch between windowed and menu-bar-only.
+    ///
+    /// `.accessory` only removes the Dock icon — it does not hide anything
+    /// already on screen, so the main window would otherwise sit there in a
+    /// mode whose whole point is not having one. Closing and reopening it is
+    /// the part that has to be explicit.
+    static func apply(menuBarMode on: Bool, openWindow: OpenWindowAction) {
+        NSApp.setActivationPolicy(on ? .accessory : .regular)
+
+        if on {
+            // The scene's id is its window identifier, so this finds the one
+            // window without disturbing panels or the flyout itself.
+            NSApp.windows.first { $0.identifier?.rawValue == "main" }?.close()
+        } else {
+            openWindow(id: "main")
+            NSApp.activate(ignoringOtherApps: true)
         }
     }
 
