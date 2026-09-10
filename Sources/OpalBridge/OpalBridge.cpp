@@ -9,6 +9,8 @@
 #include <string>
 #include <thread>
 
+#include <libusb-1.0/libusb.h>
+
 namespace {
 
 std::mutex g_errMutex;
@@ -148,7 +150,8 @@ struct OpalDeviceHandle {
     OpalTelemetry       tel{};
 };
 
-// Defined below; used by the control thread in opal_open.
+// Both defined below.
+static bool looksLikeStockC1(const std::string& mxid);
 static bool buildDelta(const OpalControls& c, const OpalControls& prev, bool havePrev,
                        dai::CameraControl& ctrl);
 
@@ -178,10 +181,12 @@ int opal_list_devices(OpalDeviceInfo* out, int maxCount) {
             // these cameras look invisible. They are not: prepareLegacyDevice()
             // walks them to the ROM bootloader, after which they are ordinary
             // unbooted devices.
+            // X_LINK_BOOTED equally describes a device running someone
+            // else's pipeline, so the descriptor decides rather than the state.
             info.usable = (d.state == X_LINK_FLASH_BOOTED ||
                            d.state == X_LINK_UNBOOTED ||
                            d.state == X_LINK_BOOTLOADER ||
-                           d.state == X_LINK_BOOTED);
+                           (d.state == X_LINK_BOOTED && looksLikeStockC1(d.getMxId())));
             out[n++] = info;
         }
         return n;
@@ -206,6 +211,61 @@ int opal_list_devices(OpalDeviceInfo* out, int maxCount) {
 // address change is why a naive attempt fails with X_LINK_DEVICE_NOT_FOUND.
 //
 // Nothing is written to flash. A power cycle restores the stock firmware.
+// Tell a first-generation C1 running its stock camera firmware from any other
+// DepthAI device that merely happens to be booted.
+//
+// This matters because X_LINK_BOOTED is not specific: it equally describes an
+// OAK running a pipeline that another application owns. Jumping one of those to
+// its bootloader would take someone else's camera out from under them.
+//
+// XLink state cannot express the difference, but the USB descriptor can. Stock
+// C1 firmware presents video and audio interfaces alongside the vendor bulk
+// endpoint; a running DepthAI pipeline presents the bulk endpoint alone.
+static bool looksLikeStockC1(const std::string& mxid) {
+    libusb_context* ctx = nullptr;
+    if(libusb_init(&ctx) != 0) return false;
+
+    libusb_device** list = nullptr;
+    ssize_t count = libusb_get_device_list(ctx, &list);
+    bool match = false;
+
+    for(ssize_t i = 0; i < count && !match; i++) {
+        libusb_device_descriptor desc{};
+        if(libusb_get_device_descriptor(list[i], &desc) != 0) continue;
+        if(desc.idVendor != 0x03E7) continue;
+
+        libusb_device_handle* handle = nullptr;
+        if(libusb_open(list[i], &handle) != 0) continue;
+
+        // The USB serial is the MxID, so this identifies the exact device
+        // rather than trusting position on the bus.
+        unsigned char serial[64] = {0};
+        if(desc.iSerialNumber &&
+           libusb_get_string_descriptor_ascii(handle, desc.iSerialNumber,
+                                              serial, sizeof(serial)) > 0 &&
+           mxid == reinterpret_cast<char*>(serial)) {
+            libusb_config_descriptor* cfg = nullptr;
+            if(libusb_get_active_config_descriptor(list[i], &cfg) == 0) {
+                bool video = false, audio = false;
+                for(uint8_t n = 0; n < cfg->bNumInterfaces; n++) {
+                    switch(cfg->interface[n].altsetting[0].bInterfaceClass) {
+                        case LIBUSB_CLASS_VIDEO: video = true; break;
+                        case LIBUSB_CLASS_AUDIO: audio = true; break;
+                        default: break;
+                    }
+                }
+                match = video && audio;
+                libusb_free_config_descriptor(cfg);
+            }
+        }
+        libusb_close(handle);
+    }
+
+    if(list) libusb_free_device_list(list, 1);
+    libusb_exit(ctx);
+    return match;
+}
+
 static bool findDeviceInState(XLinkDeviceState_t want, const std::string& mxid,
                               dai::DeviceInfo& out, double timeoutSeconds) {
     auto deadline = std::chrono::steady_clock::now()
@@ -226,6 +286,15 @@ static bool findDeviceInState(XLinkDeviceState_t want, const std::string& mxid,
 static bool prepareLegacyDevice(const std::string& mxid, dai::DeviceInfo& unbooted) {
     dai::DeviceInfo booted;
     if(!findDeviceInState(X_LINK_BOOTED, mxid, booted, 1.0)) return false;
+
+    // Refuse to reboot anything that is not demonstrably a C1 on its stock
+    // firmware. A booted device may belong to another application, and taking
+    // that away would be considerably worse than declining to help.
+    if(!looksLikeStockC1(mxid)) {
+        setError("device " + mxid + " is booted but does not look like stock C1 "
+                 "firmware; refusing to reboot it");
+        return false;
+    }
 
     bootLog("first-generation C1 in camera mode - walking it to the ROM bootloader");
 
@@ -256,11 +325,29 @@ static bool prepareLegacyDevice(const std::string& mxid, dai::DeviceInfo& unboot
         return false;
     }
 
-    // Stage 3: catch the ROM. Match on state alone - the ROM bootloader does
-    // not necessarily report the same id as the running firmware.
-    if(!findDeviceInState(X_LINK_UNBOOTED, "", unbooted, 25.0)) {
-        setError("camera never re-enumerated as an unbooted device");
-        return false;
+    // Stage 3: catch the ROM.
+    //
+    // Prefer an id match. The ROM bootloader does not always report the same id
+    // as the running firmware, so a fallback is needed — but "any unbooted
+    // device" is too loose: with a second DepthAI device attached and unbooted,
+    // the pipeline could be uploaded to that one while the intended camera sits
+    // waiting. So the fallback insists there is exactly one candidate.
+    if(!findDeviceInState(X_LINK_UNBOOTED, mxid, unbooted, 25.0)) {
+        std::vector<dai::DeviceInfo> candidates;
+        for(const auto& d : dai::XLinkConnection::getAllConnectedDevices()) {
+            if(d.state == X_LINK_UNBOOTED) candidates.push_back(d);
+        }
+        if(candidates.size() == 1) {
+            unbooted = candidates.front();
+            bootLog("ROM reports a different id; matched the only unbooted device");
+        } else if(candidates.empty()) {
+            setError("camera never re-enumerated as an unbooted device");
+            return false;
+        } else {
+            setError("several unbooted devices are attached and the ROM did not "
+                     "report a matching id; refusing to guess which is the camera");
+            return false;
+        }
     }
     bootLog("ROM bootloader reached - handing off to depthai");
     return true;
