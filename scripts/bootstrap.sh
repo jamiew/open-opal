@@ -45,6 +45,18 @@ hunter_config(
 EOF
 fi
 
+# First-generation (IMX378) Opal C1s ship a bootloader that reports version
+# 0.0.0 while still servicing requests that nominally need a higher one --
+# GetBootloaderVersion is itself declared 0.0.2, and the device answers it. So
+# depthai's client-side version check is a false negative there, and it blocks
+# the UsbRomBoot needed to reach the Myriad ROM. Patch it to let requests
+# through when the reported version is exactly 0.0.0, leaving every other
+# version untouched.
+if ! grep -q "OPAL_C1_PATCH" "$SRC/src/device/DeviceBootloader.cpp"; then
+  echo "==> patching depthai-core: allow requests on a 0.0.0 bootloader"
+  git -C "$SRC" apply "$ROOT/patches/depthai-bootloader-0.0.0.patch"
+fi
+
 echo "==> configuring (Hunter builds deps from source; first run takes a few minutes)"
 # CMake 4.x removed compatibility with pre-3.5 policies, which Hunter's own
 # nested cmake invocations still declare. The env var propagates into those
