@@ -3,16 +3,16 @@
 <plist version="1.0">
 <dict>
 	<key>com.apple.application-identifier</key>
-	<string>RD994J874S.sh.alistair.open-opal</string>
+	<string>GFU82T28YT.com.jamiedubs.open-opal</string>
 	<key>com.apple.developer.system-extension.install</key>
 	<true/>
 	<key>com.apple.developer.team-identifier</key>
-	<string>RD994J874S</string>
+	<string>GFU82T28YT</string>
 	<key>com.apple.security.app-sandbox</key>
 	<false/>
 	<key>com.apple.security.application-groups</key>
 	<array>
-		<string>group.sh.alistair.open-opal</string>
+		<string>group.com.jamiedubs.open-opal</string>
 	</array>
 	<key>com.apple.security.device.camera</key>
 	<true/>

@@ -5,8 +5,8 @@
 set -euo pipefail
 
 APP="${1:?usage: sign.sh /path/to/OpenOpal.app}"
-IDENTITY="${IDENTITY:-Developer ID Application: Alistair Smith (RD994J874S)}"
-EXT="$APP/Contents/Library/SystemExtensions/sh.alistair.open-opal.camera.systemextension"
+IDENTITY="${IDENTITY:-Developer ID Application}"
+EXT="$APP/Contents/Library/SystemExtensions/com.jamiedubs.open-opal.camera.systemextension"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 echo "==> embedding provisioning profiles"
