@@ -2,62 +2,31 @@ import SwiftUI
 
 @main
 struct OpenOpalApp: App {
-    @State private var camera = CameraModel()
-
-    /// When on, the app lives entirely in the menu bar: no Dock icon, no main
-    /// window. The camera and the virtual camera keep running either way — this
-    /// only changes where the controls live.
-    @AppStorage("menuBarMode") private var menuBarMode = false
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
     var body: some Scene {
-        Window("Open Opal", id: "main") {
-            ContentView()
-                .environment(camera)
-                .frame(minWidth: 940, minHeight: 620)
-                .task { await camera.start() }
-            // Deliberately no .onDisappear { camera.stop() }. Closing the
-            // window used to tear the camera down, which is right for a
-            // single-window app and wrong the moment a menu bar flyout can
-            // outlive it. Teardown happens on quit instead.
-        }
-        .windowStyle(.hiddenTitleBar)
-        .windowResizability(.contentMinSize)
-        .commands {
-            CommandGroup(replacing: .newItem) {}
-            CommandMenu("Camera") {
-                Button("Reconnect") {
-                    Task { await camera.reconnect() }
-                }
-                .keyboardShortcut("r")
+        Settings { EmptyView() }
+    }
+}
 
-                Button("Trigger Autofocus") { camera.device.triggerAutofocus() }
-                    .keyboardShortcut("f")
-                    .disabled(!camera.device.state.isLive)
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    private let camera = CameraModel()
+    private let controls = MenuBarPanelController()
 
-                Divider()
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.accessory)
+        controls.install(
+            content: NSHostingController(
+                rootView:
+                    MenuBarFlyout(controller: controls).environment(camera)))
+        Task { await camera.start() }
+    }
 
-                Toggle("Menu Bar Only", isOn: $menuBarMode)
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
-                Divider()
-
-                Button("Reset All Settings") { camera.settings.reset(); camera.push() }
-
-                Button("Toggle Advanced Settings") { camera.settings.showAdvanced.toggle() }
-                    .keyboardShortcut("a", modifiers: [.command, .shift])
-
-                Button(camera.previewFrozen ? "Unfreeze Preview" : "Freeze Preview") {
-                    camera.previewFrozen.toggle()
-                }
-                .keyboardShortcut("f", modifiers: [.command, .shift])
-            }
-        }
-
-        MenuBarExtra("Open Opal", systemImage: "camera.aperture") {
-            MenuBarFlyout(menuBarMode: $menuBarMode)
-                .environment(camera)
-        }
-        // .window hosts arbitrary SwiftUI, unlike .menu which is limited to menu
-        // items. That is what makes a live preview and real sliders possible.
-        .menuBarExtraStyle(.window)
+    func applicationWillTerminate(_ notification: Notification) {
+        controls.shutdown()
+        camera.stop()
     }
 }

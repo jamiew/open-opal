@@ -68,13 +68,12 @@ final class CameraModel {
     private var lastFocusArea: CGFloat?
     private var focusCooldownUntil: Date?
 
-    /// Both scenes (the window and the menu bar flyout) call this, and either
-    /// may appear first. Connecting twice would tear down a live session, so
-    /// the first caller wins and the rest are no-ops.
+    /// App-owned startup is independent of showing, hiding, or moving controls.
+    /// Repeated starts must not tear down an already live session.
     private var started = false
 
     func start() async {
-        if started { return }
+        guard !started else { return }
         started = true
 
         if renderer == nil, let r = BokehRenderer() {
