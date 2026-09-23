@@ -22,7 +22,7 @@ struct MenuBarFlyout: View {
             // Click-to-focus works here as it does in the main window. The
             // reticle is the window's own flourish and is left out — there is
             // no room for it at this size.
-            MetalPreview(texture: camera.latestTexture,
+            MetalPreview(frame: camera.latestFrame,
                          mirrored: camera.settings.mirrorPreview,
                          paused: camera.previewPaused) { _, sensorPoint in
                 camera.focus(at: sensorPoint)

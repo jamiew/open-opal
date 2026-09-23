@@ -20,8 +20,8 @@ final class CameraModel {
     let feeder = VirtualCameraFeeder()
     private var feederPollStarted = false
 
-    /// The freshest rendered texture, handed to the preview each vsync.
-    private(set) var latestTexture: MTLTexture?
+    /// Keep the pool-backed frame alive while the preview reads its texture.
+    private(set) var latestFrame: RenderedFrame?
 
     /// What the mask costs, in milliseconds. Shown in the status pill — in sync
     /// mode this is latency you actually feel, so it shouldn't be a mystery.
@@ -53,13 +53,11 @@ final class CameraModel {
         }
     }
 
-    /// Caps concurrent frames at the mask provider's lane count — more would
-    /// just block on a lane anyway. Lock-based because the frame callback runs
-    /// on the capture thread, not the main actor.
-    private let gate = FrameGate(max: 3)
+    /// Drop rather than queue while analysis/render/publication is in flight.
+    /// This keeps preview and virtual-camera delivery in the same frame order.
+    private let gate = FrameGate(max: 1)
 
-    /// Frames finish out of order when several are in flight, so we track arrival
-    /// order and refuse to present a frame older than one already on screen.
+    /// Sequence numbers keep publication monotonic across asynchronous handoffs.
     private var nextSequence = 0
     private var presentedSequence = -1
 
@@ -130,20 +128,19 @@ final class CameraModel {
                                               needsDepth: !snapshot.uniformBlur)
                 }
 
-                let texture = TexBox(t: renderer.render(pixelBuffer: frame.buffer,
-                                                        settings: snapshot))
+                guard let frame = renderer.render(pixelBuffer: frame.buffer,
+                                                  settings: snapshot) else { return }
 
-                // Feed the virtual camera the exact frame the preview shows —
-                // processed, un-mirrored. Off-main, like everything else here.
-                if let t = texture.t, self.feeder.connected,
-                   let pb = renderer.exportFrame(t) {
-                    self.feeder.send(pb)
+                // Both consumers receive this completed, independently owned frame.
+                // Mirroring is confined to the preview's display transform.
+                if self.feeder.connected {
+                    self.feeder.send(frame.pixelBuffer)
                 }
 
                 await MainActor.run {
                     if seq >= self.presentedSequence {
                         self.presentedSequence = seq
-                        self.latestTexture = texture.t
+                        self.latestFrame = frame
                     }
                 }
             }
@@ -165,6 +162,7 @@ final class CameraModel {
     func stop() {
         started = false
         device.disconnect()
+        renderer?.resetFaceTracking()
     }
 
     func reconnect() async {
@@ -172,6 +170,7 @@ final class CameraModel {
         isRebooting = true
         defer { isRebooting = false }
         device.disconnect()
+        renderer?.resetFaceTracking()
         await device.connect(settings: settings)
     }
 
@@ -308,6 +307,7 @@ final class CameraModel {
     func applyColdChanges() async {
         isRebooting = true
         defer { isRebooting = false }
+        renderer?.resetFaceTracking()
         await device.rebuildPipeline(settings: settings)
     }
 }
@@ -333,4 +333,3 @@ private final class FrameGate: @unchecked Sendable {
 /// safe to move: the pixel buffer is pool-owned with no other writer, and the
 /// texture is only read after the render that produced it completes.
 private struct FrameBox: @unchecked Sendable { let buffer: CVPixelBuffer }
-private struct TexBox: @unchecked Sendable { let t: MTLTexture? }

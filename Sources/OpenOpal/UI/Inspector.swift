@@ -33,8 +33,7 @@ struct Inspector: View {
                 VStack(spacing: 12) {
 
                 // ============================================================
-                // SIMPLE — what almost everyone actually wants. One switch and
-                // one slider. The camera handles the rest.
+                // SIMPLE — everyday controls that apply without a camera restart.
                 // ============================================================
                 Section("Background", icon: "camera.aperture", in: glass) {
                     Toggle("Blur background", isOn: $settings.bokehEnabled)
@@ -50,6 +49,10 @@ struct Inspector: View {
                                  tone: .hint)
                         }
                     }
+                }
+
+                Section("Filters", icon: "camera.filters", in: glass) {
+                    FilterBrowser(settings: settings)
                 }
 
                 Section("Image", icon: "person.crop.square", in: glass) {
@@ -89,7 +92,7 @@ struct Inspector: View {
                             .buttonStyle(.glass)
                             .controlSize(.small)
                     case .unknown:
-                        Note("Puts the processed image — blur and all — into every video app as “Open Opal Camera”.",
+                        Note("Puts the processed image — background blur and filters included — into every video app as “Open Opal Camera”.",
                              tone: .hint)
                         Button {
                             camera.installer.install()
@@ -198,8 +201,7 @@ struct Inspector: View {
                        value: settings.bokehEnabled)
         }
         .scrollIndicators(.never)
-        // Only scroll (and only bounce) once the content genuinely overflows —
-        // i.e. when Advanced is open.
+        // Only scroll (and only bounce) once the content genuinely overflows.
         .scrollBounceBehavior(.basedOnSize)
         // The scroll region runs edge-to-edge — all the way to the window's top
         // and bottom — and the CONTENT carries the inset instead. So at rest the
