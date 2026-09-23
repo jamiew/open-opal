@@ -12,7 +12,7 @@
 #
 # Requires a keychain profile created once with:
 #   xcrun notarytool store-credentials openopal \
-#     --apple-id <you@example.com> --team-id RD994J874S
+#     --apple-id <you@example.com> --team-id GFU82T28YT
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

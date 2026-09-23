@@ -17,14 +17,14 @@ below is one-time setup.
    in your keychain, or the cert shows as untrusted and `security find-identity`
    lists nothing.
 
-2. **An App Group** — e.g. `group.yourteam.yourapp`. This is not optional:
+2. **An App Group** — `group.com.jamiedubs.open-opal`. This is not optional:
    CMIO rejects any extension whose Mach service name isn't prefixed by one of
    its App Groups.
 
 3. **Two App IDs**, both with **App Groups** enabled, and the app's with
    **System Extension** enabled:
-   - `your.bundle.id` (the app)
-   - `your.bundle.id.camera` (the extension)
+   - `com.jamiedubs.open-opal` (the app)
+   - `com.jamiedubs.open-opal.camera` (the extension)
 
 4. **Two Developer ID provisioning profiles**, one per App ID. Changing
    capabilities invalidates existing profiles — regenerate them.
@@ -34,11 +34,20 @@ below is one-time setup.
 5. **Notarization credentials**, stored once:
    ```sh
    xcrun notarytool store-credentials openopal \
-     --apple-id you@example.com --team-id YOURTEAMID
+     --apple-id you@example.com --team-id GFU82T28YT
    ```
    (Needs an app-specific password from appleid.apple.com.)
 
-Then update the team ID, bundle IDs and App Group in `project.yml`, and run:
+Use team `GFU82T28YT` for the certificate and both profiles. An existing Apple
+Development identity or another app's profile does not satisfy this Developer ID
+release workflow. `scripts/sign.sh` selects `Developer ID Application`; set
+`IDENTITY` to the full certificate name or fingerprint if multiple identities match.
+
+`project.yml` deliberately leaves build-time signing disabled. Regenerate with
+`xcodegen generate` after changing it; the release script then builds, embeds
+the profiles, and signs the app. Bundle-ID changes must also update the requested
+extension ID in `ExtensionInstaller.swift` and the extension path in `scripts/sign.sh`.
+Run:
 
 ```sh
 ./scripts/release.sh     # build -> sign -> notarize -> staple -> /Applications
