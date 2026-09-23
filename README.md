@@ -9,6 +9,17 @@ camera directly over USB.
 
 <img width="820" alt="Open Opal" src="docs/screenshot.png">
 
+## Fork branches
+
+`main` starts from upstream and accepts individually reviewed and tested PRs.
+`develop` combines the feature branches for integration testing, including the
+previous `main` history. Do not merge `develop` wholesale into `main`.
+
+The detachable panel and filters use different preview APIs in their standalone
+PRs; `develop` contains the combined `RenderedFrame` integration. Builds and
+synthetic rendering/conversion checks pass, but combined hardware behavior,
+signing, and receiving-app delivery still need testing.
+
 ## Features
 
 - Exposure: auto, or manual shutter and ISO, with EV compensation and AE lock
