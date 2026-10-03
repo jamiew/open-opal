@@ -14,7 +14,7 @@ private let log = Logger(subsystem: "com.openopal", category: "sysext")
 @MainActor
 final class ExtensionInstaller: NSObject {
 
-    static let extensionID = "sh.alistair.open-opal.camera"
+    static let extensionID = "com.jamiedubs.open-opal.camera"
 
     enum Status: Equatable {
         case unknown
