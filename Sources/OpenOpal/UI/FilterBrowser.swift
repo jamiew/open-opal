@@ -41,6 +41,9 @@ struct FilterBrowser: View {
             selectedControls
 
             Divider()
+            FilterEditor(settings: settings)
+
+            Divider()
 
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")

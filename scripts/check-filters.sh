@@ -13,8 +13,16 @@ xcrun -sdk macosx metallib "$WORK"/*.air -o "$WORK/default.metallib"
 xcrun swiftc -swift-version 6 -parse-as-library \
     "$ROOT"/Sources/OpenOpal/Render/*.swift \
     "$ROOT/Sources/OpenOpal/Camera/CameraSettings.swift" \
+    "$ROOT/Sources/OpenOpal/VirtualCamera/VirtualCameraFrameConverter.swift" \
     "$ROOT/tools/filter_checks.swift" \
     "$ROOT/tools/creative_filter_checks.swift" \
     "$ROOT/tools/portrait_filter_checks.swift" \
     -o "$WORK/filter-checks"
 "$WORK/filter-checks"
+xcrun swiftc -swift-version 6 -parse-as-library \
+    "$ROOT/Sources/OpenOpal/Render/CameraFilter.swift" \
+    "$ROOT/Sources/OpenOpal/Filters/FilterRecipe.swift" \
+    "$ROOT/Sources/OpenOpal/Filters/FilterPresetStore.swift" \
+    "$ROOT/tools/recipe_checks.swift" \
+    -o "$WORK/recipe-checks"
+"$WORK/recipe-checks"

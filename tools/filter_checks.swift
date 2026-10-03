@@ -162,6 +162,7 @@ struct FilterChecks {
         let settings = CameraSettings()
         settings.bokehEnabled = false
         settings.meterOnSubject = false
+        settings.focusOnSubject = false
         let input = nv12()
         guard let original = renderer.render(pixelBuffer: input, settings: RenderSettings(settings)) else {
             fatalError("Original frame failed")
@@ -211,6 +212,24 @@ struct FilterChecks {
             }
         }
 
+        let converter = VirtualCameraFrameConverter()
+        guard let converted = converter.convert(warm.pixelBuffer) else { fatalError("Virtual output conversion failed") }
+        require(CVPixelBufferGetWidth(converted) == 1920 && CVPixelBufferGetHeight(converted) == 1080,
+                "Virtual output must match extension's advertised dimensions")
+        require(CVPixelBufferGetPixelFormatType(converted) == kCVPixelFormatType_32BGRA,
+                "Virtual output must match extension's BGRA format")
+        let scaled = pixel(converted, x: 960, y: 540)
+        require(zip(scaled, golden).allSatisfy { abs(Int($0) - Int($1)) <= 2 },
+                "Virtual output scaling must preserve filtered colors")
+        require(converter.convert(converted) === converted, "Native 1080p must not allocate or copy")
+
+        guard let square = converter.convert(nv12(width: 320, height: 320)) else {
+            fatalError("Square input conversion failed")
+        }
+        require(pixel(square, x: 0, y: 540) == [0, 0, 0, 255],
+                "Non-widescreen input must be letterboxed, not stretched")
+        require(pixel(square, x: 960, y: 540)[2] > 0, "Letterboxing removed the image")
+
         // Exhaust a separate renderer's bounded pool while consumers retain frames.
         guard let bounded = BokehRenderer() else { fatalError("Second renderer unavailable") }
         settings.filter = .none
@@ -230,6 +249,6 @@ struct FilterChecks {
             require(bounded.render(pixelBuffer: input, settings: RenderSettings(settings)) != nil,
                     "Pool must recover after consumers release frames")
         }
-        print("PASS: native renderer colors, bypass, no-face, retained-frame ownership, pool bounds")
+        print("PASS: native renderer colors, bypass, no-face, retained-frame ownership, pool bounds, virtual output conversion")
     }
 }
