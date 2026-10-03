@@ -350,7 +350,10 @@ Repeated packaging after an incremental rebuild exposed an old rewritten
 library collision. Releases now use `clean build`; the fresh build packaged
 successfully without weakening collision checks.
 
-No camera, USB, or installed extension was exercised. The app is unsigned;
-installing the bundled extension or login helper still needs the signing
-workflow. Live tracking, concurrent model/video performance, and receiving-app
-output remain for the user's test.
+The local app has ad-hoc signatures, not a Developer ID signature. The packaged
+Homebrew library needed its signature restored after load-path rewriting.
+Offline controls then ran against the final bundled libraries successfully.
+No account keys, camera, USB, or installed extension were used. Installing the
+bundled extension or login helper still needs the release signing workflow.
+Live tracking, concurrent model/video performance, and receiving-app output
+remain for the user's test.
