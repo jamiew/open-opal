@@ -56,7 +56,7 @@ if(OPAL_BRIDGE_TEST)
     enable_testing()
     add_executable(control_delta_test test/control_delta_test.cpp)
     target_include_directories(control_delta_test PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
-    target_link_libraries(control_delta_test PRIVATE depthai::core)
+    target_link_libraries(control_delta_test PRIVATE depthai::core "${OPAL_LIBUSB}")
     set_target_properties(control_delta_test PROPERTIES
         INSTALL_RPATH "${CMAKE_CURRENT_LIST_DIR}/../../vendor/install/lib"
         BUILD_WITH_INSTALL_RPATH TRUE)
