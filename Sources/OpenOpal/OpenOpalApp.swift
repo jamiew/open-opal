@@ -23,6 +23,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await camera.start() }
     }
 
+    func applicationDidBecomeActive(_ notification: Notification) {
+        camera.autoLaunch.refresh()
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     func applicationWillTerminate(_ notification: Notification) {
