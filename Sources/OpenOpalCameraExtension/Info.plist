@@ -23,7 +23,7 @@
 	<key>CMIOExtension</key>
 	<dict>
 		<key>CMIOExtensionMachServiceName</key>
-		<string>group.sh.alistair.open-opal.camera</string>
+		<string>group.com.jamiedubs.open-opal.camera</string>
 	</dict>
 	<key>NSSystemExtensionUsageDescription</key>
 	<string>Provides the Open Opal virtual camera that other apps can use.</string>

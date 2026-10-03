@@ -1,7 +1,7 @@
 name: OpenOpal
 
 options:
-  bundleIdPrefix: sh.alistair
+  bundleIdPrefix: com.jamiedubs
   deploymentTarget:
     macOS: "26.0"
   createIntermediateGroups: true
@@ -12,16 +12,10 @@ settings:
     MACOSX_DEPLOYMENT_TARGET: "26.0"
     ARCHS: arm64
     ENABLE_HARDENED_RUNTIME: YES
-    # Ad-hoc signing: enough to BUILD the system extension into the bundle.
-    # Actually LOADING it requires a real team identity (or sysext developer
-    # mode); switch CODE_SIGN_IDENTITY + DEVELOPMENT_TEAM when the user's
-    # Developer ID is wired up.
-    # Real Developer ID signing. The system-extension entitlement is restricted:
-    # AMFI refuses to launch an ad-hoc binary carrying it, so the virtual camera
-    # only works with a genuine team identity. Signed post-build by
-    # scripts/sign.sh, which handles the inside-out ordering (extension and
-    # dylibs before the app) that codesign requires.
-    DEVELOPMENT_TEAM: RD994J874S
+    # Builds are unsigned. scripts/sign.sh signs nested libraries, the camera
+    # extension, and the app with Developer ID and matching profiles afterward.
+    # Changing the team or bundle IDs alone does not enable signed builds.
+    DEVELOPMENT_TEAM: GFU82T28YT
     CODE_SIGN_IDENTITY: "-"
     CODE_SIGNING_REQUIRED: NO
     CODE_SIGNING_ALLOWED: NO
@@ -74,10 +68,10 @@ targets:
         # cannot associate the app with its team+bundle-ID pair — so it finds no
         # extensions belonging to us and reports the misleading
         # "extensionNotFound". OBS's app carries exactly these two.
-        com.apple.application-identifier: RD994J874S.sh.alistair.open-opal
-        com.apple.developer.team-identifier: RD994J874S
+        com.apple.application-identifier: GFU82T28YT.com.jamiedubs.open-opal
+        com.apple.developer.team-identifier: GFU82T28YT
         com.apple.security.application-groups:
-          - group.sh.alistair.open-opal
+          - group.com.jamiedubs.open-opal
     dependencies:
       - target: OpenOpalCameraExtension
         embed: true
@@ -93,7 +87,7 @@ targets:
         codeSign: true
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: sh.alistair.open-opal
+        PRODUCT_BUNDLE_IDENTIFIER: com.jamiedubs.open-opal
         SWIFT_OBJC_BRIDGING_HEADER: Sources/OpenOpal/OpenOpal-Bridging-Header.h
         HEADER_SEARCH_PATHS:
           - $(SRCROOT)/Sources/OpalBridge/include
@@ -129,7 +123,7 @@ targets:
       - path: Sources/OpenOpalCameraExtension
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: sh.alistair.open-opal.camera
+        PRODUCT_BUNDLE_IDENTIFIER: com.jamiedubs.open-opal.camera
         # The bundle must be NAMED after its identifier — Xcode's system
         # extension template does exactly this (PRODUCT_NAME =
         # $(PRODUCT_BUNDLE_IDENTIFIER)), and OBS ships
@@ -137,7 +131,7 @@ targets:
         # lookup matches on the bundle filename, so a bundle called
         # "OpenOpalCameraExtension.systemextension" is invisible to it and comes
         # back as extensionNotFound — even though the identifier inside is right.
-        PRODUCT_NAME: sh.alistair.open-opal.camera
+        PRODUCT_NAME: com.jamiedubs.open-opal.camera
         SWIFT_VERSION: "6.0"
     info:
       path: Sources/OpenOpalCameraExtension/Info.plist
@@ -155,18 +149,18 @@ targets:
           # because the build itself is unsigned (signing happens post-build in
           # scripts/sign.sh), and a Mach service name without the team prefix
           # never matches.
-          CMIOExtensionMachServiceName: group.sh.alistair.open-opal.camera
+          CMIOExtensionMachServiceName: group.com.jamiedubs.open-opal.camera
     entitlements:
       path: Sources/OpenOpalCameraExtension/OpenOpalCameraExtension.entitlements
       properties:
         # CMIO extensions run sandboxed, no exceptions.
         com.apple.security.app-sandbox: true
-        com.apple.application-identifier: RD994J874S.sh.alistair.open-opal.camera
-        com.apple.developer.team-identifier: RD994J874S
+        com.apple.application-identifier: GFU82T28YT.com.jamiedubs.open-opal.camera
+        com.apple.developer.team-identifier: GFU82T28YT
         # THE fix. CMIO validation rejects the extension outright unless its
         # Mach service name is prefixed by one of the App Groups it declares:
         #   "invalid mach service name ... must be prefixed with one of the App
         #    Groups in the entitlement"
         # A bare team-ID prefix is not enough.
         com.apple.security.application-groups:
-          - group.sh.alistair.open-opal
+          - group.com.jamiedubs.open-opal

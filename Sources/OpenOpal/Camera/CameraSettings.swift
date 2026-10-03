@@ -1,13 +1,14 @@
 import Foundation
 import Observation
 
-/// Everything the C1's ISP can be told to do, in one observable model.
+/// Camera controls and host-side rendering settings in one observable model.
 ///
-/// Split into two groups that behave very differently:
+/// Device controls split into two groups that behave very differently:
 ///  - **hot** settings stream over the XLink control queue and apply within a
 ///    frame or two.
 ///  - **cold** settings (resolution, fps) are baked into the device pipeline and
 ///    require a reboot of the Myriad — roughly 2-5 seconds of black.
+/// Host-side bokeh and filters apply immediately without changing the device pipeline.
 @Observable
 final class CameraSettings {
 
@@ -168,6 +169,12 @@ final class CameraSettings {
     var contrast: Int = 0             // -10..10
     var saturation: Int = 0           // -10..10
 
+    // MARK: - Filters (host-side; no camera restart)
+
+    var filter: CameraFilter = .none
+    var filterIntensity: Double = 0.7
+    var animateFilters = true
+
     // MARK: - Bokeh (host-side; see BokehRenderer)
 
     /// Most people want one switch and one slider. Everything else is here for
@@ -256,6 +263,12 @@ final class CameraSettings {
         matteQuality = .accurate
     }
 
+    func resetFilters() {
+        filter = .none
+        filterIntensity = 0.7
+        animateFilters = true
+    }
+
     func reset() {
         autoExposure = true; evCompensation = 0; aeLock = false
         exposureUs = 8_000; iso = 400
@@ -265,6 +278,7 @@ final class CameraSettings {
         manualWhiteBalance = false; awbMode = .auto; whiteBalanceK = 5600; awbLock = false
         sharpness = 1; lumaDenoise = 1; chromaDenoise = 1
         brightness = 0; contrast = 0; saturation = 0
+        resetFilters()
     }
 }
 

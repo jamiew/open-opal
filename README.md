@@ -19,6 +19,8 @@ camera directly over USB.
 - 4K / 1080p / 720p, up to 42 fps
 - Background blur, rendered in Metal with Apple's Vision segmentation
 - Optional exposure metering on your face instead of the whole frame
+- Local filters: face-tracked cowboy hat and cat decorations, beauty softening,
+  monochrome, and warm color, with a searchable browser and intensity control
 
 Frames are downscaled on the camera's own ISP before crossing USB, which keeps
 glass-to-screen latency around 45 ms at 1080p30. The toolbar shows the live
@@ -87,24 +89,93 @@ Myriad X (IMX582)
                                                               │
                               IOSurface CVPixelBuffer ◄───────┘  (the only copy)
                                         │
-              Metal: NV12 → linear RGB → mask → blur → composite
+              Metal: NV12 → linear RGB → mask → blur → composite → filter
                                         │
-                                 SwiftUI preview
+                    owned BGRA frame → preview + virtual camera
 ```
 
 The background blur uses Vision person segmentation, computed for the same
-frame it masks (several frames are analysed concurrently to hold 30 fps),
-then blurred in linear light so highlights bloom instead of greying out. An
-optional depth-graded mode uses
+frame it masks, then blurred in linear light so highlights bloom instead of
+graying out. Capture drops incoming frames while processing is busy instead
+of queuing latency. An optional depth-graded mode uses
 [Depth Anything V2](https://huggingface.co/apple/coreml-depth-anything-v2-small)
 for distance-based falloff.
+
+## Camera filters
+
+The inspector's Filters browser has 21 effects plus None, grouped into four
+categories. Search or page through six cards at a time. Selected-effect controls
+stay above the catalog, including intensity and an animation switch where useful.
+Changing a filter never reboots the camera.
+
+| Category | Effects |
+| --- | --- |
+| Portrait | Cowboy, Cat, Beauty, Cyber Warrior, Baby Face, Anime Face, Beard, Glam Hair, Sunglasses, Bearded Cowboy |
+| Color | Monochrome, Warm, Thermal |
+| Art | Anime Ink, Halftone, Blueprint, Risograph |
+| Digital | Point Cloud, Glitch, Pixel Art, Hologram |
+
+Portrait effects use Apple's Vision face landmarks locally. The other effects
+need no face tracking. Missing or stale detections remove face attachments.
+Intensity zero bypasses the filter pass and face analysis. Disabling animation
+holds shader time fixed; video and face tracking continue.
+
+All artwork is procedural. Cat and Cyber Warrior are 2D face decorations, not
+full avatars. Anime Ink is cel shading and edge drawing, not generative face
+replacement. Point Cloud is a 2D dot visualization, not reconstructed depth.
+Thermal maps brightness to false color and cannot measure temperature.
+Beauty softens the face without geometric reshaping. Baby Face and Anime Face
+enlarge facial features with local warps, not photorealistic age or character
+replacement. Beard and Glam Hair are illustrated accessories for anyone, not
+gender transformations. Bearded Cowboy combines the beard and existing hat.
+
+Effects run after background blur in one Metal pass and reach both the preview
+and virtual camera. Only the preview is mirrored. Spatial patterns scale with
+resolution; animated effects use bounded, explicit time rather than frame counts.
+
+No Snap lenses, extra downloaded models, cloud calls, or camera uploads are
+involved. Snap's proprietary lens archive is not a portable renderer format.
+See [PLAN.md](PLAN.md) for compatibility research. The
+[agent authoring spec](docs/FILTER_AUTHORING.md) documents shader contracts,
+acceptance checks, and the native Generate & Edit panel. Describe a look using
+Apple's on-device Foundation Models, or edit a draft manually when the model is
+unavailable. Generation selects existing effects, not new shaders or artwork.
+
+Review the draft's look, intensity, and motion, or preview it on a synthetic face.
+**Apply to output** updates preview and virtual camera together. Revert discards
+draft edits; Undo restores the previous active look. Save draft writes validated
+JSON presets locally under `~/Library/Application Support/OpenOpal/FilterPresets`
+without applying them. Saved presets load into the draft for review.
+
+Model output can misunderstand a request. Review the selected look and its
+catalog description before applying. Arbitrary stacking, custom colors, and
+photorealistic transformations are not supported. Generation never uploads
+camera frames, downloads extra weights, or falls back to a remote model.
+
+This branch requires a user-approved live review before release. Camera-free
+compiler and synthetic-frame checks do not establish tracking quality, sustained
+frame rate, or output in Zoom/Meet. Do not launch a new build while another app
+is using the C1.
+
+Camera-free regression checks:
+
+```sh
+bash scripts/check-filters.sh
+```
+
+This compiles the Metal shaders and a standalone Swift executable, then checks
+generated frames, synthetic face anchors, portrait warps and mouth protection,
+catalog search, time determinism, animation-off behavior, intensity, tiny/odd
+image sizes, output ownership, and virtual-output conversion. It never starts Open Opal, opens a
+capture device, or connects to the virtual-camera extension.
 
 ## Virtual camera
 
 Open Opal installs a CoreMediaIO system extension that publishes **"Open Opal
 Camera"** to every app on the Mac — Zoom, Meet, FaceTime, anything. It carries
-the processed image, blur and all. When the app isn't running it shows a placard
-rather than a frozen frame.
+the processed image, including blur and filters. Its advertised output stays
+1920×1080 BGRA; other capture resolutions are scaled to fit. When the app isn't
+running it shows a placard rather than a frozen frame.
 
 Installing it requires a signed and notarized build; see
 [docs/SIGNING.md](docs/SIGNING.md). The app itself runs fine unsigned.

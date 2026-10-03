@@ -101,7 +101,7 @@ struct ContentView: View {
     private var preview: some View {
         GeometryReader { geo in
             ZStack {
-                MetalPreview(texture: camera.latestTexture,
+                MetalPreview(frame: camera.latestFrame,
                              mirrored: camera.settings.mirrorPreview,
                              paused: camera.previewPaused) { viewPoint, sensorPoint in
                     // The camera is told where to focus in SENSOR space; the
