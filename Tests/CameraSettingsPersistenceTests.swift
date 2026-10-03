@@ -1,13 +1,12 @@
 import Foundation
 
-/// Hardware-free regression test. Compile alongside CameraSettings.swift.
+/// Camera-free regression checks. Compile with CameraSettings.
 @main
 struct CameraSettingsPersistenceTests {
     static func main() throws {
         let preferences = MemoryPreferences()
         let initial = CameraSettings(preferences: preferences)
-        precondition(initial.lensPosition == 120 && initial.brightness == 0)
-        precondition(!initial.meterOnSubject && !initial.bokehEnabled)
+        let defaults = CameraSettings(preferences: MemoryPreferences())
 
         initial.manualFocus = true
         initial.lensPosition = 187
@@ -22,7 +21,7 @@ struct CameraSettingsPersistenceTests {
         initial.fps = 40
         initial.mirrorPreview = false
         initial.showAdvanced = true
-        initial.meterOnSubject = true
+        initial.meterOnSubject = false
         precondition(initial.coldDirty)
 
         let restored = CameraSettings(preferences: preferences)
@@ -30,16 +29,16 @@ struct CameraSettingsPersistenceTests {
         precondition(restored.brightness == -3)
         precondition(!restored.autoExposure && restored.exposureUs == 12_000 && restored.iso == 800)
         precondition(restored.manualWhiteBalance && restored.whiteBalanceK == 4200)
-        precondition(restored.antiBanding == .hz50 && restored.meterOnSubject)
+        precondition(restored.antiBanding == .hz50 && !restored.meterOnSubject)
         precondition(restored.outputMode == .hd720 && restored.fps == 40)
         precondition(!restored.mirrorPreview && restored.showAdvanced && !restored.coldDirty)
 
         restored.reset()
-        precondition(!restored.meterOnSubject && restored.antiBanding == .hz60)
+        precondition(restored.meterOnSubject == defaults.meterOnSubject && restored.antiBanding == .hz60)
         let reset = CameraSettings(preferences: preferences)
         precondition(!reset.manualFocus && reset.lensPosition == 120 && reset.brightness == 0)
         precondition(reset.autoExposure && reset.exposureUs == 8000)
-        precondition(!reset.meterOnSubject && reset.antiBanding == .hz60)
+        precondition(reset.meterOnSubject == defaults.meterOnSubject && reset.antiBanding == .hz60)
 
         // Blur-only changes must save immediately, without another camera
         // control change accidentally triggering the write for them.
@@ -75,13 +74,27 @@ struct CameraSettingsPersistenceTests {
         resetBlur.bokehEnabled = false
         precondition(!CameraSettings(preferences: preferences).bokehEnabled)
 
+        let effects = CameraSettings(preferences: preferences)
+        effects.focusOnSubject = false
+        precondition(!CameraSettings(preferences: preferences).focusOnSubject)
+        effects.limitAfRange = true
+        precondition(CameraSettings(preferences: preferences).limitAfRange)
+        effects.afRangeInfinity = 70
+        precondition(CameraSettings(preferences: preferences).afRangeInfinity == 70)
+        effects.afRangeMacro = 180
+        precondition(CameraSettings(preferences: preferences).afRangeMacro == 180)
+        effects.reset()
+        let resetEffects = CameraSettings(preferences: preferences)
+        precondition(resetEffects.focusOnSubject == defaults.focusOnSubject && !resetEffects.limitAfRange)
+        precondition(resetEffects.afRangeInfinity == defaults.afRangeInfinity)
+        precondition(resetEffects.afRangeMacro == defaults.afRangeMacro)
+
         func restore(_ json: String) -> CameraSettings {
             preferences.set(Data(json.utf8), forKey: CameraSettings.persistenceKey)
             return CameraSettings(preferences: preferences)
         }
         let partial = restore(#"{"version":1,"brightness":4}"#)
         precondition(partial.brightness == 4 && partial.lensPosition == 120)
-        precondition(!partial.meterOnSubject)
         precondition(!partial.bokehEnabled && partial.aperture == 2.8)
         precondition(partial.syncBokeh && partial.uniformBlur && partial.matteQuality == .accurate)
         precondition(partial.focusDistance == 0.35 && partial.autoFocusSubject)
@@ -92,13 +105,23 @@ struct CameraSettingsPersistenceTests {
         let invalidBlur = restore(#"{"version":1,"bokehEnabled":true,"aperture":999,"focusDistance":-1,"highlightBloom":2,"brightness":4}"#)
         precondition(invalidBlur.bokehEnabled && invalidBlur.brightness == 4)
         precondition(invalidBlur.aperture == 2.8 && invalidBlur.focusDistance == 0.35 && invalidBlur.highlightBloom == 0.55)
+        for range in ["\"afRangeInfinity\":200,\"afRangeMacro\":100",
+                      "\"afRangeInfinity\":-1,\"afRangeMacro\":256",
+                      "\"afRangeInfinity\":70"] {
+            let invalidRange = restore("{\"version\":1,\(range),\"limitAfRange\":true,\"brightness\":3}")
+            precondition(invalidRange.limitAfRange && invalidRange.brightness == 3)
+            precondition(invalidRange.afRangeInfinity == defaults.afRangeInfinity)
+            precondition(invalidRange.afRangeMacro == defaults.afRangeMacro)
+        }
+        let boundaryRange = restore(#"{"version":1,"afRangeInfinity":0,"afRangeMacro":255}"#)
+        precondition(boundaryRange.afRangeInfinity == 0 && boundaryRange.afRangeMacro == 255)
         for json in ["not JSON", #"{"version":1,"lensPosition":"wrong type"}"#,
                      #"{"version":1,"afMode":"unknown"}"#,
                      #"{"version":2,"brightness":4}"#] {
             let fallback = restore(json)
             precondition(fallback.brightness == 0 && fallback.lensPosition == 120 && !fallback.coldDirty)
         }
-        print("Camera settings persistence: passed round-trip, reset, defaults, and invalid-data checks")
+        print("Camera settings persistence: passed controls, blur, focus limits, reset, and invalid-data checks")
     }
 }
 

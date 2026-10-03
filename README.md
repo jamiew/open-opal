@@ -9,6 +9,7 @@ camera directly over USB.
 
 <img width="820" alt="Open Opal" src="docs/screenshot.png">
 
+
 ## Features
 
 - Exposure: auto, or manual shutter and ISO, with EV compensation and AE lock
@@ -27,6 +28,10 @@ Click the camera-aperture icon to open the controls. The header button also
 switches between docked and floating controls. Clicking away or pressing Escape
 hides the panel without disconnecting the camera. Click the icon to reopen it.
 Quit ends the camera session.
+
+Camera controls, capture size, blur, and autofocus limits survive app restarts.
+Reset All also clears saved autofocus choices. Existing saved settings inherit
+defaults for fields they do not contain.
 
 Frames are downscaled on the camera's own ISP before crossing USB, which keeps
 glass-to-screen latency around 45 ms at 1080p30. The toolbar shows the live

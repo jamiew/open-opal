@@ -95,15 +95,15 @@ final class CameraSettings {
     var afMode: AFMode = .continuousVideo { didSet { save() } }
 
     /// Refocus on the detected face rather than letting AF re-decide for itself.
-    var focusOnSubject = true
+    var focusOnSubject = true { didSet { save() } }
 
     /// Clamp where autofocus may hunt, in lens-position units. A desk occupies
     /// a narrow band of the lens's travel, so unrestricted AF racks past you to
     /// the far wall and back. Off by default: the right band depends on how far
     /// you sit from the lens.
-    var limitAfRange = false
-    var afRangeInfinity = 90    // far end
-    var afRangeMacro    = 160   // near end
+    var limitAfRange = false { didSet { save() } }
+    var afRangeInfinity = 90 { didSet { save() } } // far end
+    var afRangeMacro = 160 { didSet { save() } } // near end
 
     enum AFMode: String, Codable, CaseIterable, Identifiable {
         case auto              = "Auto"
@@ -165,6 +165,7 @@ final class CameraSettings {
     var brightness: Int = 0 { didSet { save() } } // -10..10
     var contrast: Int = 0 { didSet { save() } } // -10..10
     var saturation: Int = 0 { didSet { save() } } // -10..10
+
 
     // MARK: - Bokeh (host-side; see BokehRenderer)
 
@@ -271,6 +272,13 @@ final class CameraSettings {
         if let value = saved.manualFocus { manualFocus = value }
         if let value = saved.lensPosition, (0...255).contains(value) { lensPosition = value }
         if let value = saved.afMode { afMode = value }
+        if let value = saved.focusOnSubject { focusOnSubject = value }
+        if let value = saved.limitAfRange { limitAfRange = value }
+        if let far = saved.afRangeInfinity, let near = saved.afRangeMacro,
+           (0...255).contains(far), (0...255).contains(near), far <= near {
+            afRangeInfinity = far
+            afRangeMacro = near
+        }
         if let value = saved.manualWhiteBalance { manualWhiteBalance = value }
         if let value = saved.whiteBalanceK, (1000...12000).contains(value) { whiteBalanceK = value }
         if let value = saved.awbMode { awbMode = value }
@@ -310,6 +318,10 @@ final class CameraSettings {
             manualFocus: manualFocus,
             lensPosition: lensPosition,
             afMode: afMode,
+            focusOnSubject: focusOnSubject,
+            limitAfRange: limitAfRange,
+            afRangeInfinity: afRangeInfinity,
+            afRangeMacro: afRangeMacro,
             manualWhiteBalance: manualWhiteBalance,
             whiteBalanceK: whiteBalanceK,
             awbMode: awbMode,
@@ -353,6 +365,10 @@ final class CameraSettings {
         var manualFocus: Bool?
         var lensPosition: Int?
         var afMode: AFMode?
+        var focusOnSubject: Bool?
+        var limitAfRange: Bool?
+        var afRangeInfinity: Int?
+        var afRangeMacro: Int?
         var manualWhiteBalance: Bool?
         var whiteBalanceK: Int?
         var awbMode: AWBMode?
@@ -387,7 +403,7 @@ final class CameraSettings {
 
     func reset() {
         autoExposure = true; evCompensation = 0; aeLock = false
-        meterOnSubject = false
+        meterOnSubject = true
         exposureUs = 8_000; iso = 400
         manualFocus = false; afMode = .continuousVideo; lensPosition = 120
         focusOnSubject = true
