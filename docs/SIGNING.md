@@ -44,10 +44,16 @@ release workflow. `scripts/sign.sh` selects `Developer ID Application`; set
 `IDENTITY` to the full certificate name or fingerprint if multiple identities match.
 
 `project.yml` deliberately leaves build-time signing disabled. Regenerate with
-`xcodegen generate` after changing it; the release script then builds, embeds
-the profiles, and signs the app. Bundle-ID changes must also update the requested
-extension ID in `ExtensionInstaller.swift` and the extension path in `scripts/sign.sh`.
-Run:
+`xcodegen generate` after changing it. Before releasing another fork:
+
+- Update the team ID, bundle IDs, extension product name, App Group and
+  `CMIOExtensionMachServiceName` in `project.yml`. Keep the extension's bundle ID
+  equal to the app's bundle ID plus `.camera`.
+- Keep both targets' entitlements consistent with those settings and profiles.
+- Update the hardcoded `EXT` path in `scripts/sign.sh` to the extension's
+  `<bundle-id>.systemextension` name.
+
+The release script builds, embeds profiles, and signs the app. Run:
 
 ```sh
 ./scripts/release.sh     # build -> sign -> notarize -> staple -> /Applications
