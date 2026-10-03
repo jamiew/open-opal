@@ -26,7 +26,7 @@ ZIP="build/OpenOpal.zip"
 echo "==> building (Release)"
 xcodegen generate >/dev/null
 xcodebuild -project OpenOpal.xcodeproj -scheme OpenOpal \
-  -configuration Release -derivedDataPath "$DERIVED" build \
+  -configuration Release -derivedDataPath "$DERIVED" clean build \
   > build/xcodebuild.log 2>&1 || { tail -25 build/xcodebuild.log; exit 1; }
 
 echo "==> bundling runtime dependencies"

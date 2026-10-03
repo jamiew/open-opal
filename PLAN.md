@@ -319,3 +319,38 @@ Xcode 27 reports Foundation Models `GenerationOptions(sampling:)` deprecations;
 the initializer is retained for the macOS 26 API. No camera access, app
 replacement, signing, extension activation, or live receiving-app verification
 was performed. Concurrent video/model performance remains unmeasured.
+
+## Integrated dev build
+
+The dev build combines current main, the native filters, and Generate & Edit.
+Main includes the merged dependency, saved-control, playback-stream, and
+automatic-startup fixes. The original dirty filter checkout stays unchanged.
+
+Camera-free verification passed:
+
+- Synthetic Metal effects, frame ownership, bounded pools, and virtual-output
+  conversion; strict recipes and local preset persistence.
+- Camera, blur, filter, and focus-limit persistence, reset, invalid-data handling,
+  and startup-policy transitions.
+- Two boot-safety checks, seven dependency-packaging checks, and serialized
+  autofocus controls against the freshly rebuilt DepthAI library.
+- Light-mode production browser/editor rendering, synthetic preview, and
+  draft/Apply/Revert/Undo/Save/reload transitions with isolated preferences.
+- Unsigned Release builds of the app, extension, and login helper. Packaging
+  validated seven Mach-O binaries with no dependency outside the app or macOS.
+
+The real local model first rejected a supported combined look, returned an
+invalid title, and changed looks during a refinement. Generation now uses catalog
+titles, an explicit current-look choice, and a capability decision before its
+explanation. The final three-case smoke selected Bearded Cowboy, reduced its
+intensity from 0.8 to 0.4 without changing looks, and rejected unsupported
+photorealism and a custom hat color. This is not a general semantic guarantee.
+
+Repeated packaging after an incremental rebuild exposed an old rewritten
+library collision. Releases now use `clean build`; the fresh build packaged
+successfully without weakening collision checks.
+
+No camera, USB, or installed extension was exercised. The app is unsigned;
+installing the bundled extension or login helper still needs the signing
+workflow. Live tracking, concurrent model/video performance, and receiving-app
+output remain for the user's test.

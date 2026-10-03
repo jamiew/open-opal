@@ -178,6 +178,10 @@ A validated recipe selects one supported look and its existing controls:
 }
 ```
 
+Generation uses the selected catalog title instead of inventing one. You can
+rename the draft manually. Strength and motion refinements can keep the current
+look without choosing another catalog effect.
+
 Validation rules:
 
 - Accept exactly these keys; reject unknown keys and unsupported schema versions.
