@@ -68,7 +68,13 @@ final class CameraModel {
     /// make auto-exposure visibly pump.
     private var lastMeteredRect: CGRect?
 
+    /// App-owned startup is independent of showing, hiding, or moving controls.
+    /// Repeated starts must not tear down an already live session.
+    private var started = false
+
     func start() async {
+        guard !started else { return }
+        started = true
         if renderer == nil, let r = BokehRenderer() {
             if let mtl = MTLCreateSystemDefaultDevice() {
                 // The depth model is loaded lazily — it's 50MB and, in the default
@@ -149,7 +155,10 @@ final class CameraModel {
         await device.connect(settings: settings)
     }
 
-    func stop() { device.disconnect() }
+    func stop() {
+        started = false
+        device.disconnect()
+    }
 
     func reconnect() async {
         isRebooting = true
