@@ -61,6 +61,22 @@ struct Inspector: View {
                 }
 
                 Section("Virtual Camera", icon: "video.badge.checkmark", in: glass) {
+                    if camera.autoLaunch.isIncludedInApp {
+                        Toggle("Start OpenOpal automatically", isOn: Binding(
+                            get: { camera.autoLaunch.isEnabled },
+                            set: { camera.autoLaunch.setEnabled($0) }))
+                            .disabled(camera.autoLaunch.isChanging)
+                        Note("A login helper opens OpenOpal when a video app uses “Open Opal Camera”.",
+                             tone: .hint)
+                        if camera.autoLaunch.status == .requiresApproval {
+                            Note("Allow OpenOpal Launcher in Login Items to enable automatic startup.", tone: .warning)
+                            Button("Open Login Items") { camera.autoLaunch.openLoginItems() }
+                                .buttonStyle(.glass)
+                        }
+                        if let error = camera.autoLaunch.error {
+                            Note(error, tone: .warning)
+                        }
+                    }
                     switch camera.installer.status {
                     case .installed:
                         if camera.feeder.connected {
@@ -92,16 +108,21 @@ struct Inspector: View {
                             .buttonStyle(.glass)
                             .controlSize(.small)
                     case .unknown:
-                        Note("Puts the processed image — background blur and filters included — into every video app as “Open Opal Camera”.",
-                             tone: .hint)
-                        Button {
-                            camera.installer.install()
-                        } label: {
-                            Label("Install virtual camera", systemImage: "arrow.down.circle")
-                                .frame(maxWidth: .infinity)
+                        if !camera.installer.isIncludedInApp {
+                            Note("This build supports camera controls and preview. Use a signed extension build to make the camera available to video apps.",
+                                 tone: .hint)
+                        } else {
+                            Note("Puts the processed image — background blur and filters included — into every video app as “Open Opal Camera”.",
+                                 tone: .hint)
+                            Button {
+                                camera.installer.install()
+                            } label: {
+                                Label("Install virtual camera", systemImage: "arrow.down.circle")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.glassProminent)
+                            .controlSize(.small)
                         }
-                        .buttonStyle(.glassProminent)
-                        .controlSize(.small)
                     }
                 }
 
@@ -294,8 +315,12 @@ struct Inspector: View {
 
                 // --- Focus ---------------------------------------------------
                 Section("Focus", icon: "camera.metering.spot", plain: true) {
-                    Toggle("Manual", isOn: $settings.manualFocus)
-                        .onChange(of: settings.manualFocus) { camera.push() }
+                    Toggle("Manual", isOn: Binding(
+                        get: { settings.manualFocus },
+                        set: {
+                            settings.manualFocus = $0
+                            camera.push()
+                        }))
 
                     if settings.manualFocus {
                         Slider2("Position", value: Binding(

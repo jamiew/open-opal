@@ -159,7 +159,7 @@ struct FilterChecks {
         require(!CameraFilter.matching(query: "").contains(.none),
                 "Off remains a separate always-reachable action")
         guard let renderer = BokehRenderer() else { fatalError("Metal renderer unavailable") }
-        let settings = CameraSettings()
+        let settings = CameraSettings(preferences: MemoryPreferences())
         settings.bokehEnabled = false
         settings.meterOnSubject = false
         settings.focusOnSubject = false
@@ -251,4 +251,10 @@ struct FilterChecks {
         }
         print("PASS: native renderer colors, bypass, no-face, retained-frame ownership, pool bounds, virtual output conversion")
     }
+}
+
+private final class MemoryPreferences: UserDefaults {
+    private var stored: [String: Data] = [:]
+    override func data(forKey defaultName: String) -> Data? { stored[defaultName] }
+    override func set(_ value: Any?, forKey defaultName: String) { stored[defaultName] = value as? Data }
 }

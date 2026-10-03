@@ -10,15 +10,21 @@ import SwiftUI
 final class CameraModel {
 
     let device = OpalDevice()
-    let settings = CameraSettings()
+    let settings: CameraSettings
     private(set) var renderer: BokehRenderer?
 
     /// Virtual camera: system-extension installer and the sink feeder. The
     /// feeder polls for the device — the extension may activate minutes after
     /// install, or already be running from a previous launch.
     let installer = ExtensionInstaller()
+    let autoLaunch = AutoLaunchController()
     let feeder = VirtualCameraFeeder()
     private var feederPollStarted = false
+    private var isStarting = false
+
+    init(preferences: UserDefaults = .standard) {
+        settings = CameraSettings(preferences: preferences)
+    }
 
     /// Keep the pool-backed frame alive while the preview reads its texture.
     private(set) var latestFrame: RenderedFrame?
@@ -73,9 +79,10 @@ final class CameraModel {
     private var started = false
 
     func start() async {
-        guard !started else { return }
+        guard !started, !isStarting, !isRebooting, !device.state.isLive else { return }
         started = true
-
+        isStarting = true
+        defer { isStarting = false }
         if renderer == nil, let r = BokehRenderer() {
             if let mtl = MTLCreateSystemDefaultDevice() {
                 // The depth model is loaded lazily — it's 50MB and, in the default
@@ -160,11 +167,13 @@ final class CameraModel {
 
     func stop() {
         started = false
+        resetFocusTracking()
         device.disconnect()
         renderer?.resetFaceTracking()
     }
 
     func reconnect() async {
+        guard !isStarting, !isRebooting else { return }
         resetFocusTracking()
         isRebooting = true
         defer { isRebooting = false }
@@ -175,7 +184,12 @@ final class CameraModel {
 
     /// Send hot settings to the camera. Cheap — safe to call on every slider tick.
     /// The bridge coalesces and diffs, so nothing here blocks on USB.
-    func push() { device.apply(settings) }
+    func push() {
+        // Clear immediately, even if manual focus is turned off again before
+        // the next subject analysis arrives.
+        if settings.manualFocus { resetFocusTracking() }
+        device.apply(settings)
+    }
 
     /// Bring the renderer in line with the settings: mask quality, and whether the
     /// depth model needs to exist at all.
@@ -304,8 +318,10 @@ final class CameraModel {
 
     /// Cold settings changed; reboot the pipeline to pick them up.
     func applyColdChanges() async {
+        guard !isStarting, !isRebooting else { return }
         isRebooting = true
         defer { isRebooting = false }
+        resetFocusTracking()
         renderer?.resetFaceTracking()
         await device.rebuildPipeline(settings: settings)
     }

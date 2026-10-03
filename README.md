@@ -23,7 +23,7 @@ signing, and receiving-app delivery still need testing.
 ## Features
 
 - Exposure: auto, or manual shutter and ISO, with EV compensation and AE lock
-- Focus: autofocus modes, manual lens position, click anywhere to focus
+- Focus: autofocus modes, manual lens position, click anywhere to focus, optional person-based tracking and lens search limits
 - White balance: presets or manual Kelvin
 - Anti-banding for 50/60 Hz lighting
 - Sharpness, denoise, brightness, contrast, saturation
@@ -41,9 +41,27 @@ switches between docked and floating controls. Clicking away or pressing Escape
 hides the panel without disconnecting the camera. Click the icon to reopen it.
 Quit ends the camera session.
 
+Camera controls, capture size, blur, and autofocus limits survive app restarts.
+Reset All also clears saved autofocus choices. Existing saved settings inherit
+defaults for fields they do not contain.
+
 Frames are downscaled on the camera's own ISP before crossing USB, which keeps
 glass-to-screen latency around 45 ms at 1080p30. The toolbar shows the live
 number.
+
+### Autofocus
+
+“Follow face” uses the upper-middle of the segmented person's box as an estimate
+of where a face is, not a face detector. It refocuses when that area's size changes
+by more than 40%, with a one-second cooldown. This works best with one person
+facing the camera; raised arms or multiple people can confuse the estimate.
+
+“Limit range” restricts autofocus to the Far and Near lens positions you choose
+(0–255). The limit is restored after switching from manual to automatic focus,
+changing autofocus mode, or focusing on a region. Turning the limit off restores
+the full 0–255 range. Exposure and other unrelated control changes do not restart
+autofocus. Entering manual focus clears the tracking history immediately, so
+returning to automatic focus can refocus even if the person's size has not changed.
 
 ## Building
 
@@ -67,6 +85,32 @@ cp -R build/DerivedData/Build/Products/Release/OpenOpal.app /Applications/
 
 Use Release builds for day-to-day use — Debug builds noticeably stutter in UI
 animations.
+
+First-generation IMX378 C1s use a RAM-only bootloader handoff. The pinned
+DepthAI SDK patch allows only `GetBootloaderVersion` and `UsbRomBoot` to bypass
+the version check when the bootloader reports exactly `0.0.0`; unrelated
+requests keep their version checks. Existing SDK libraries must be rebuilt
+with `./scripts/bootstrap.sh` after updating this patch, then the app rebuilt.
+Bootstrap refuses SDK source with the older unrestricted `OPAL_C1_PATCH`:
+restore only its two request-version checks to upstream v2.30.0, preserving any
+other SDK edits, before rerunning bootstrap.
+
+The camera-free safety regressions compile isolated C++ harnesses without
+linking DepthAI or accessing USB:
+
+```sh
+python3 -m unittest discover -s scripts/tests -p 'test_boot_safety.py'
+```
+
+The autofocus regressions inspect real serialized commands without opening a
+camera. Build and run only this offline target; `bridge_test` and `region_test`
+access the camera.
+
+```sh
+cmake -S Sources/OpalBridge -B build/control-tests -DOPAL_BRIDGE_TEST=ON
+cmake --build build/control-tests --target control_delta_test
+ctest --test-dir build/control-tests -R '^control_delta$' --output-on-failure
+```
 
 ## The hardware
 
@@ -100,6 +144,12 @@ pipeline graph that the firmware instantiates on the VPU. Quitting reboots
 the camera back to its stock firmware within a few seconds. Nothing is ever
 written to flash, so the takeover can't brick anything. The app narrates
 each stage live while connecting, with real sizes and timings.
+
+For first-generation IMX378 C1s, the stock camera must present both video and
+audio interfaces before Open Opal attempts the handoff. Every reconnect must
+report the selected camera's MxID. If that ID disappears or changes, Open Opal
+fails safely without uploading the pipeline, even if only one unbooted device
+is attached. A USB address change is allowed; an unidentified device is not.
 
 ```
 Myriad X (IMX582)
@@ -192,8 +242,10 @@ capture device, or connects to the virtual-camera extension.
 
 Open Opal installs a CoreMediaIO system extension that publishes **"Open Opal
 Camera"** to every app on the Mac — Zoom, Meet, FaceTime, anything. It carries
-the processed image, background blur and filters included. When the app isn't
-running it shows a placard rather than a frozen frame.
+the processed image, background blur and filters included. When the app isn't running it
+shows a camera-off symbol rather than a frozen frame. The fallback contains no
+text, so it stays understandable in mirrored self-views and in the normal video
+other participants receive.
 
 Virtual-camera output is always 1920×1080 BGRA, matching the extension's
 advertised format. Other input sizes are scaled to fit with black bars rather
@@ -201,6 +253,18 @@ than stretched; native 1080p BGRA frames pass through without an extra copy.
 
 Installing it requires a signed and notarized build; see
 [docs/SIGNING.md](docs/SIGNING.md). The app itself runs fine unsigned.
+
+Enable **Start OpenOpal automatically** in the Virtual Camera section to launch
+OpenOpal when a video app starts using **Open Opal Camera**. A small login helper
+listens for capture requests; it does not open the camera or process video.
+If macOS requests approval, allow OpenOpal Launcher in **System Settings →
+General → Login Items & Extensions**. Disable the same toggle to remove the helper.
+
+OpenOpal starts quietly in the menu bar without opening the controls or taking
+focus from your meeting. Hiding or closing controls leaves the camera running;
+quit OpenOpal to release it. While the helper observes the same capture session,
+quitting does not immediately relaunch it. Turn the meeting's camera off and on,
+or reopen OpenOpal, to start again. Camera startup still takes a few seconds.
 
 ## Status
 
