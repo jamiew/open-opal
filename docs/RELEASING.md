@@ -32,6 +32,27 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
+## Camera-free control checks
+
+These standalone checks use isolated preferences and launch-policy state. They
+do not open a camera, register the helper, or activate the extension.
+
+```sh
+swiftc -swift-version 6 Sources/OpenOpal/Render/CameraFilter.swift \
+  Sources/OpenOpal/Camera/CameraSettings.swift \
+  Tests/CameraSettingsPersistenceTests.swift -o /tmp/opal-settings-checks
+/tmp/opal-settings-checks
+swiftc -swift-version 6 Sources/OpenOpalLauncher/CameraLaunchPolicy.swift \
+  Tests/CameraLaunchPolicyTests.swift -o /tmp/opal-launch-checks
+/tmp/opal-launch-checks
+```
+
+The integration also passed an unsigned app, extension, and helper build using
+existing native libraries. Synthetic feeder checks covered sink selection,
+numbered-frame delivery, conversion, queue-full drops, and failed-enqueue
+ownership. These checks do not establish installed-extension or live-camera
+behavior.
+
 ## One-time: repository secrets
 
 The CI can't sign or notarize without these. Add them under

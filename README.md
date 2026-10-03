@@ -10,6 +10,12 @@ camera directly over USB.
 <img width="820" alt="Open Opal" src="docs/screenshot.png">
 
 
+`camera-auto-start` builds on `bundle-repairs` with the two commits from
+[upstream PR #2](https://github.com/alii/open-opal/pull/2). It keeps this fork's
+single camera owner and detachable panel instead of restoring the old window
+layout. The helper uses this fork's bundle ID and starts the app only when
+automatic startup is enabled.
+
 ## Features
 
 - Exposure: auto, or manual shutter and ISO, with EV compensation and AE lock
@@ -180,11 +186,11 @@ listens for capture requests; it does not open the camera or process video.
 If macOS requests approval, allow OpenOpal Launcher in **System Settings →
 General → Login Items & Extensions**. Disable the same toggle to remove the helper.
 
-OpenOpal opens without taking focus from your meeting. Closing its controls
-window leaves the camera running; quit OpenOpal to release it. Deliberately
-quitting during a call will not immediately relaunch it: turn the meeting's
-camera off and on, or reopen OpenOpal, to start again. The camera still needs a
-few seconds to boot when OpenOpal launches.
+OpenOpal starts quietly in the menu bar without opening the controls or taking
+focus from your meeting. Hiding or closing controls leaves the camera running;
+quit OpenOpal to release it. While the helper observes the same capture session,
+quitting does not immediately relaunch it. Turn the meeting's camera off and on,
+or reopen OpenOpal, to start again. Camera startup still takes a few seconds.
 
 ## Status
 
