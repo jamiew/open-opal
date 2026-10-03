@@ -96,6 +96,17 @@ final class CameraSettings {
     var lensPosition: Int = 120       // 0..255
     var afMode: AFMode = .continuousVideo
 
+    /// Refocus on the detected face rather than letting AF re-decide for itself.
+    var focusOnSubject = true
+
+    /// Clamp where autofocus may hunt, in lens-position units. A desk occupies
+    /// a narrow band of the lens's travel, so unrestricted AF racks past you to
+    /// the far wall and back. Off by default: the right band depends on how far
+    /// you sit from the lens.
+    var limitAfRange = false
+    var afRangeInfinity = 90    // far end
+    var afRangeMacro    = 160   // near end
+
     enum AFMode: String, CaseIterable, Identifiable {
         case auto              = "Auto"
         case continuousVideo   = "Continuous"
@@ -249,6 +260,8 @@ final class CameraSettings {
         autoExposure = true; evCompensation = 0; aeLock = false
         exposureUs = 8_000; iso = 400
         manualFocus = false; afMode = .continuousVideo; lensPosition = 120
+        focusOnSubject = true
+        limitAfRange = false; afRangeInfinity = 90; afRangeMacro = 160
         manualWhiteBalance = false; awbMode = .auto; whiteBalanceK = 5600; awbLock = false
         sharpness = 1; lumaDenoise = 1; chromaDenoise = 1
         brightness = 0; contrast = 0; saturation = 0
