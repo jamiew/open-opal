@@ -27,6 +27,10 @@ same read-only check before signing. Run packaging before signing, since
 rewriting a Mach-O file invalidates any existing signature. The packaging tests
 compile tiny Mach-O fixtures on macOS without launching the app or camera.
 
+The release script runs `clean build` before packaging. This removes old bundled
+libraries whose load paths or signatures were rewritten by a previous release.
+Do the same when rebuilding a manually packaged app before packaging it again.
+
 ```sh
 git tag v0.1.0
 git push origin v0.1.0
