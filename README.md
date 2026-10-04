@@ -1,13 +1,15 @@
 # Open Opal
 
-A native macOS app for the Opal C1 webcam. Opal has discontinued the C1 and its
-Composer software; this project keeps the camera working.
+A native macOS app for the Opal C1 webcam. Opal discontinued the C1 and its
+Composer software; Open Opal keeps the camera working, and adds a few things.
 
-The C1 is built on Luxonis' [DepthAI](https://github.com/luxonis/depthai-core)
-platform, so it can be driven with open-source tools. Open Opal talks to the
-camera directly over USB.
+<img width="440" alt="Open Opal in the menu bar" src="docs/screenshot.png">
 
-<img width="820" alt="Open Opal" src="docs/screenshot.png">
+- Full camera control: exposure, focus, white balance, image tuning, 4K/1080p/720p
+- Background blur
+- A virtual camera, **Open Opal Camera**, for Zoom, Meet, FaceTime and the rest
+- Lives in the menu bar; drag the panel off to float it
+- About 45 ms from lens to screen
 
 ## Fork branches
 
@@ -15,10 +17,10 @@ camera directly over USB.
 `develop` combines the feature branches for integration testing, including the
 previous `main` history. Do not merge `develop` wholesale into `main`.
 
-The detachable panel and filters use different preview APIs in their standalone
-PRs; `develop` contains the combined `RenderedFrame` integration. Builds and
-synthetic rendering/conversion checks pass, but combined hardware behavior,
-signing, and receiving-app delivery still need testing.
+`filter-effects` includes the native filters, Generate & Edit, and current
+upstream camera fixes. It requires macOS 26, including when editing manually.
+Upstream's macOS 14 support does not cover this experimental editor.
+Live tracking, camera reconnection, signing, and Zoom/Meet output still need testing.
 
 ## Features
 
@@ -37,17 +39,20 @@ signing, and receiving-app delivery still need testing.
 
 The app starts in the menu bar without a Dock icon or a separate main window.
 Click the camera-aperture icon to open the controls. The header button also
-switches between docked and floating controls. Clicking away or pressing Escape
-hides the panel without disconnecting the camera. Click the icon to reopen it.
-Quit ends the camera session.
+switches between docked and floating controls. Clicking away hides docked controls;
+floating controls stay open. Escape hides either without disconnecting the camera.
+Click the icon to reopen them. Right-click the icon to quit.
 
 Camera controls, capture size, blur, and autofocus limits survive app restarts.
 Reset All also clears saved autofocus choices. Existing saved settings inherit
 defaults for fields they do not contain.
 
-Frames are downscaled on the camera's own ISP before crossing USB, which keeps
-glass-to-screen latency around 45 ms at 1080p30. The toolbar shows the live
-number.
+Download the latest DMG from [Releases](https://github.com/alii/open-opal/releases)
+and drag Open Opal to Applications. Click the lens icon in the menu bar to
+open it, and right-click the icon to quit.
+
+To use the virtual camera, click **Install virtual camera** and allow it in
+System Settings if asked.
 
 ### Autofocus
 
@@ -63,25 +68,22 @@ the full 0–255 range. Exposure and other unrelated control changes do not rest
 autofocus. Entering manual focus clears the tracking history immediately, so
 returning to automatic focus can refocus even if the person's size has not changed.
 
+Without an explicit limit, autofocus mode changes preserve the camera's tuned
+range. Saved one-shot autofocus restores as Continuous on the next app start.
+Subject-based exposure and autofocus are opt-in; saved choices still restore.
+
 ## Building
 
-Needs an Apple silicon Mac on macOS 26 or later, Xcode 26, and
-`brew install cmake ninja xcodegen`.
-
 ```sh
-./scripts/bootstrap.sh     # fetches and builds depthai-core
-./scripts/fetch-models.sh  # downloads the Core ML depth model
+brew install cmake ninja xcodegen
+./scripts/bootstrap.sh
+./scripts/fetch-models.sh
 xcodegen generate
-open OpenOpal.xcodeproj    # then build & run from Xcode (⌘R)
+open OpenOpal.xcodeproj
 ```
 
-To build from the command line and install to /Applications:
-
-```sh
-xcodebuild -project OpenOpal.xcodeproj -scheme OpenOpal \
-  -configuration Release -derivedDataPath build/DerivedData build
-cp -R build/DerivedData/Build/Products/Release/OpenOpal.app /Applications/
-```
+Building needs Xcode 26 or newer. See [TECHNICAL.md](TECHNICAL.md) for details,
+tests, and how the camera takeover works.
 
 Use Release builds for day-to-day use — Debug builds noticeably stutter in UI
 animations.

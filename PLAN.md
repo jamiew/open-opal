@@ -357,3 +357,33 @@ No account keys, camera, USB, or installed extension were used. Installing the
 bundled extension or login helper still needs the release signing workflow.
 Live tracking, concurrent model/video performance, and receiving-app output
 remain for the user's test.
+
+## Upstream refresh
+
+`filter-effects` now includes upstream `8d47cfb` and preserves the native filters
+and editor. Main and develop remain unchanged. This branch still requires
+macOS 26; upstream's macOS 14 target does not cover Foundation Models.
+
+Camera-free checks passed:
+
+- Synthetic Metal effects, owned frames, bounded pools, output conversion,
+  strict recipes, and preset persistence.
+- Ten Python boot-safety and dependency-packaging checks; saved camera settings,
+  one-shot focus restoration, and startup-policy transitions.
+- Actual on-device generation selected Bearded Cowboy at 0.8, kept it at 0.4
+  during refinement, and rejected photorealism with a custom hat color.
+- The production panel and filter browser ran in a standalone light-mode host.
+  Floating, docking, resizing, focus-loss dismissal, close, reopen hooks, and
+  shutdown passed. Isolated draft/save/reload/Apply/Undo/Revert actions and
+  synthetic output pixels passed.
+- Release app, extension, and helper built in an isolated tree. Seven packaged
+  Mach-O binaries passed dependency and minimum-OS validation. Local ad-hoc
+  signatures verified; serialized autofocus controls ran against those libraries.
+  Owned temporary Launch Services registrations were removed and verified absent.
+
+No camera, USB discovery, real app launch, or extension activation occurred.
+The full inspector, mirrored click-focus reticle, live unplug/reconnect,
+tracking quality, and Zoom/Meet delivery remain unverified.
+Pending discovery/open and rendering are not cancelled on teardown; native close
+can outlast its timeout. Late work can still finish after shutdown.
+These lifecycle gaps and real Snap Lens compatibility remain unfinished.

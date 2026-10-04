@@ -13,9 +13,6 @@ struct Inspector: View {
     /// (net layout change: zero) and springs to nothing.
     @State private var foldSpacer: CGFloat = 0
 
-    @State private var scrollPos = ScrollPosition()
-
-
     var body: some View {
         @Bindable var settings = camera.settings
 
@@ -28,9 +25,11 @@ struct Inspector: View {
         // The old version animated a fixed pane while its contents jumped — every
         // part of that reads as cheap, because the material stayed rigid while the
         // things inside it teleported.
+        ScrollViewReader { scroll in
         ScrollView {
-            GlassEffectContainer(spacing: 12) {
+            GlassContainer(spacing: 12) {
                 VStack(spacing: 12) {
+                Color.clear.frame(height: 0).id(Self.top)
 
                 // ============================================================
                 // SIMPLE — everyday controls that apply without a camera restart.
@@ -71,7 +70,7 @@ struct Inspector: View {
                         if camera.autoLaunch.status == .requiresApproval {
                             Note("Allow OpenOpal Launcher in Login Items to enable automatic startup.", tone: .warning)
                             Button("Open Login Items") { camera.autoLaunch.openLoginItems() }
-                                .buttonStyle(.glass)
+                                .glassButtonStyle()
                         }
                         if let error = camera.autoLaunch.error {
                             Note(error, tone: .warning)
@@ -105,7 +104,7 @@ struct Inspector: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         Button("Try again") { camera.installer.install() }
-                            .buttonStyle(.glass)
+                            .glassButtonStyle()
                             .controlSize(.small)
                     case .unknown:
                         if !camera.installer.isIncludedInApp {
@@ -120,7 +119,7 @@ struct Inspector: View {
                                 Label("Install virtual camera", systemImage: "arrow.down.circle")
                                     .frame(maxWidth: .infinity)
                             }
-                            .buttonStyle(.glassProminent)
+                            .glassButtonStyle(prominent: true)
                             .controlSize(.small)
                         }
                     }
@@ -158,7 +157,7 @@ struct Inspector: View {
                             // never clamps.
                             foldSpacer = advancedHeight
                             settings.showAdvanced = false
-                            scrollPos.scrollTo(edge: .top)
+                            scroll.scrollTo(Self.top, anchor: .top)
                         } else {
                             foldSpacer = 0
                             settings.showAdvanced = true
@@ -178,8 +177,8 @@ struct Inspector: View {
                     }
                     .font(.system(size: 12, weight: .medium))
                 }
-                .buttonStyle(.glass)
-                .glassEffectID("advanced-toggle", in: glass)
+                .glassButtonStyle()
+                .glassID("advanced-toggle", in: glass)
 
                 // Collapse without the snap, in a way glass actually permits.
                 //
@@ -225,9 +224,11 @@ struct Inspector: View {
         .scrollBounceBehavior(.basedOnSize)
         .contentMargins(.top, 12, for: .scrollContent)
         .contentMargins(.bottom, 18, for: .scrollContent)
-        .scrollPosition($scrollPos)
         .frame(maxHeight: .infinity, alignment: .top)
+        }
     }
+
+    private static let top = "inspector-top"
 
     // ================================================================
     // ADVANCED — every knob the ISP exposes, for people who want them.
@@ -272,7 +273,7 @@ struct Inspector: View {
                             Label("Restart camera to apply", systemImage: "arrow.clockwise")
                                 .frame(maxWidth: .infinity)
                         }
-                        .buttonStyle(.glassProminent)
+                        .glassButtonStyle(prominent: true)
                         .controlSize(.small)
                     }
                 }
@@ -378,7 +379,7 @@ struct Inspector: View {
                             Label("Refocus now", systemImage: "camera.metering.center.weighted")
                                 .frame(maxWidth: .infinity)
                         }
-                        .buttonStyle(.glass)
+                        .glassButtonStyle()
                         .controlSize(.small)
 
                         Note("Click anywhere on the image to focus there.", tone: .hint)
@@ -490,7 +491,7 @@ struct Inspector: View {
                     camera.settings.resetBokeh()
                     camera.push()
                 }
-                .buttonStyle(.glass)
+                .glassButtonStyle()
                 .controlSize(.small)
                 .padding(.top, 2)
         }
@@ -501,7 +502,7 @@ struct Inspector: View {
         // animated together multiplied the compositing cost of every animation
         // frame. Collapsing them into a single slab is what lets the
         // expand/collapse run at full frame rate.
-        .glassEffect(.regular, in: .rect(cornerRadius: 22))
+        .glassSurface(in: .rect(cornerRadius: 22))
         .modifier(GlassID(id: "advanced-slab", namespace: glass))
     }
 }
@@ -552,7 +553,7 @@ private struct Section<Content: View>: View {
         if plain {
             core.background(.primary.opacity(0.05), in: .rect(cornerRadius: 14))
         } else {
-            core.glassEffect(.regular, in: .rect(cornerRadius: 18))
+            core.glassSurface(in: .rect(cornerRadius: 18))
                 .modifier(GlassID(id: title, namespace: namespace))
         }
     }
@@ -565,7 +566,7 @@ private struct GlassID: ViewModifier {
 
     func body(content: Content) -> some View {
         if let namespace {
-            content.glassEffectID(id, in: namespace)
+            content.glassID(id, in: namespace)
         } else {
             content
         }

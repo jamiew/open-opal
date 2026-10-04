@@ -53,6 +53,9 @@ final class OpalDevice {
         set { sink.callback = newValue }
     }
 
+    /// Invalidates capture-dependent tracking for manual and watchdog restarts.
+    var onDisconnect: (() -> Void)?
+
     /// The frame path lives entirely off the main actor: depthai delivers frames
     /// on its own thread, and bouncing every one through the main actor just to
     /// copy bytes would put a 30Hz memcpy of 3MB behind whatever the UI is doing.
@@ -67,6 +70,10 @@ final class OpalDevice {
     private let bootSink = BootLogSink()
     private var handle: OpaquePointer?
     private var telemetryTimer: Timer?
+    /// A close still in flight. Connecting waits for it, so two XLink sessions
+    /// never fight over one camera.
+    private var closing: Task<Void, Never>?
+    private var isConnecting = false
 
     init() {
         opal_set_boot_logger(opalBootLogTrampoline,
@@ -85,7 +92,9 @@ final class OpalDevice {
         var id: String { mxid }
     }
 
-    func discover() -> [Discovered] {
+    /// Scans USB through XLink, which takes a while and can block behind a
+    /// stuck close, so it never runs on the main actor.
+    nonisolated static func discover() -> [Discovered] {
         var infos = [OpalDeviceInfo](repeating: OpalDeviceInfo(), count: 8)
         let n = infos.withUnsafeMutableBufferPointer { opal_list_devices($0.baseAddress, 8) }
         return (0..<Int(n)).map { i in
@@ -107,17 +116,24 @@ final class OpalDevice {
     /// the XLink stream outright ("Couldn't read data from stream: __bootloader").
     /// So: wait for it, don't fail on it.
     func connect(settings: CameraSettings) async {
-        guard handle == nil else { return }
+        guard handle == nil, !isConnecting else { return }
+        isConnecting = true
+        defer { isConnecting = false }
         lastSettings = settings
 
         state = .searching
         bootLog.removeAll()
 
+        if let closing {
+            await closing.value
+            self.closing = nil
+        }
+
         let deadline = Date().addingTimeInterval(20)
         var target: Discovered?
 
         while Date() < deadline {
-            let devices = discover()
+            let devices = await Task.detached(priority: .userInitiated) { Self.discover() }.value
             // A device still in BOOTLOADER is mid-reboot: it'll be ready shortly.
             if let ready = devices.first(where: { $0.usable }) {
                 target = ready
@@ -189,6 +205,9 @@ final class OpalDevice {
 
         handle = opened
         readInfo()
+        // The previous session's last frame is long gone; without this the
+        // watchdog sees a stale heartbeat and reboots the new stream at once.
+        sink.stampFrame()
         state = .streaming
         apply(settings)
         startTelemetry()
@@ -198,15 +217,61 @@ final class OpalDevice {
         log.info("streaming from \(self.sensorName, privacy: .public)")
     }
 
+    /// Release the camera without blocking the main actor.
+    ///
+    /// opal_close joins the capture thread and resets the Myriad. After an
+    /// unplug, DepthAI can wait in there forever on a USB transfer that will
+    /// never complete; on the main actor that froze the whole app. So close in
+    /// the background, and stop waiting after a few seconds so a dead camera
+    /// can't wedge the next connect. An abandoned close just leaks its handle.
     func disconnect() {
         telemetryTimer?.invalidate()
         telemetryTimer = nil
-        if let handle {
-            // Blocking: joins the capture thread and resets the Myriad.
-            opal_close(handle)
-            self.handle = nil
-        }
         state = .searching
+        onDisconnect?()
+        guard let handle else { return }
+        self.handle = nil
+        let box = HandleBox(handle)
+        closing = Task { [weak self] in
+            let closed = await Self.close(box, timeout: 5)
+            if !closed {
+                log.warning("camera did not close within 5s; continuing without it")
+                self?.bootLog.append("[close] camera did not respond; continuing without it")
+            }
+        }
+    }
+
+    /// For app termination: try to close cleanly so the camera returns to its
+    /// stock mode, but never hold up quitting for more than `timeout`.
+    func shutdown(timeout: TimeInterval = 2) {
+        telemetryTimer?.invalidate()
+        telemetryTimer = nil
+        state = .searching
+        onDisconnect?()
+        guard let handle else { return }
+        self.handle = nil
+        let box = HandleBox(handle)
+        let done = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).async {
+            opal_close(box.handle)
+            done.signal()
+        }
+        _ = done.wait(timeout: .now() + timeout)
+    }
+
+    /// Runs opal_close off the main actor. Returns false if it was still
+    /// blocked after `timeout`; the close keeps running and finishes or not.
+    private nonisolated static func close(_ box: HandleBox, timeout: TimeInterval) async -> Bool {
+        await withCheckedContinuation { continuation in
+            let once = ResumeOnce(continuation)
+            DispatchQueue.global(qos: .userInitiated).async {
+                opal_close(box.handle)
+                once.resume(true)
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+                once.resume(false)
+            }
+        }
     }
 
     /// Cold settings (resolution/fps) live in the device pipeline, so changing
@@ -518,6 +583,19 @@ private func opalBootLogTrampoline(line: UnsafePointer<CChar>?,
 
 /// OpaquePointer isn't Sendable, but the depthai handle genuinely is safe to
 /// move: the bridge guards it internally, and we only ever hand it back to C.
+/// Resumes a continuation at most once, whichever of two racers gets there first.
+private final class ResumeOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Bool, Never>?
+    init(_ c: CheckedContinuation<Bool, Never>) { continuation = c }
+    func resume(_ value: Bool) {
+        lock.withLock {
+            continuation?.resume(returning: value)
+            continuation = nil
+        }
+    }
+}
+
 private struct HandleBox: @unchecked Sendable {
     let handle: OpaquePointer?
     init(_ h: OpaquePointer?) { handle = h }

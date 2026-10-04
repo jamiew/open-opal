@@ -30,7 +30,6 @@ compile tiny Mach-O fixtures on macOS without launching the app or camera.
 The release script runs `clean build` before packaging. This removes old bundled
 libraries whose load paths or signatures were rewritten by a previous release.
 Do the same when rebuilding a manually packaged app before packaging it again.
-
 ```sh
 git tag v0.1.0
 git push origin v0.1.0
@@ -81,7 +80,9 @@ capabilities. Use this team's certificate and profiles, regenerate them per
 
 ## Runner
 
-The workflow uses `runs-on: macos-26` for Xcode 26 / the Liquid Glass SDK. If
-GitHub renames that image, update the label. The first run builds depthai-core
-from source (~several minutes); it's cached afterward and only rebuilds when
-`scripts/bootstrap.sh` changes.
+The workflow uses `runs-on: macos-26` for Xcode 26 and the Liquid Glass SDK.
+This experimental branch targets macOS 26 because its editor uses Foundation
+Models. `bundle-dependencies.py` rejects bundled libraries that require a newer
+macOS than the app declares. Upstream's macOS 14 target does not apply here.
+The first run builds depthai-core from source and caches it. Changes to
+`scripts/bootstrap.sh` or `patches/` rebuild it.

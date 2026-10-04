@@ -24,6 +24,10 @@ final class CameraModel {
 
     init(preferences: UserDefaults = .standard) {
         settings = CameraSettings(preferences: preferences)
+        device.onDisconnect = { [weak self] in
+            self?.resetFocusTracking()
+            self?.renderer?.resetFaceTracking()
+        }
     }
 
     /// Keep the pool-backed frame alive while the preview reads its texture.
@@ -74,13 +78,11 @@ final class CameraModel {
     private var lastFocusArea: CGFloat?
     private var focusCooldownUntil: Date?
 
-    /// App-owned startup is independent of showing, hiding, or moving controls.
-    /// Repeated starts must not tear down an already live session.
-    private var started = false
 
     func start() async {
-        guard !started, !isStarting, !isRebooting, !device.state.isLive else { return }
-        started = true
+        // A launch request can reopen the window while a previous window task
+        // is still booting the camera. There must only be one USB open in flight.
+        guard !isStarting, !isRebooting, !device.state.isLive else { return }
         isStarting = true
         defer { isStarting = false }
         if renderer == nil, let r = BokehRenderer() {
@@ -165,20 +167,13 @@ final class CameraModel {
         await device.connect(settings: settings)
     }
 
-    func stop() {
-        started = false
-        resetFocusTracking()
-        device.disconnect()
-        renderer?.resetFaceTracking()
-    }
+    func stop() { device.shutdown() }
 
     func reconnect() async {
         guard !isStarting, !isRebooting else { return }
-        resetFocusTracking()
         isRebooting = true
         defer { isRebooting = false }
         device.disconnect()
-        renderer?.resetFaceTracking()
         await device.connect(settings: settings)
     }
 
@@ -321,8 +316,6 @@ final class CameraModel {
         guard !isStarting, !isRebooting else { return }
         isRebooting = true
         defer { isRebooting = false }
-        resetFocusTracking()
-        renderer?.resetFaceTracking()
         await device.rebuildPipeline(settings: settings)
     }
 }

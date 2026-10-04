@@ -21,7 +21,7 @@ struct CameraSettingsPersistenceTests {
         initial.fps = 40
         initial.mirrorPreview = false
         initial.showAdvanced = true
-        initial.meterOnSubject = false
+        initial.meterOnSubject = true
         precondition(initial.coldDirty)
 
         let restored = CameraSettings(preferences: preferences)
@@ -29,16 +29,16 @@ struct CameraSettingsPersistenceTests {
         precondition(restored.brightness == -3)
         precondition(!restored.autoExposure && restored.exposureUs == 12_000 && restored.iso == 800)
         precondition(restored.manualWhiteBalance && restored.whiteBalanceK == 4200)
-        precondition(restored.antiBanding == .hz50 && !restored.meterOnSubject)
+        precondition(restored.antiBanding == .hz50 && restored.meterOnSubject)
         precondition(restored.outputMode == .hd720 && restored.fps == 40)
         precondition(!restored.mirrorPreview && restored.showAdvanced && !restored.coldDirty)
 
         restored.reset()
-        precondition(restored.meterOnSubject == defaults.meterOnSubject && restored.antiBanding == .hz60)
+        precondition(!restored.meterOnSubject && restored.antiBanding == .hz60)
         let reset = CameraSettings(preferences: preferences)
         precondition(!reset.manualFocus && reset.lensPosition == 120 && reset.brightness == 0)
         precondition(reset.autoExposure && reset.exposureUs == 8000)
-        precondition(reset.meterOnSubject == defaults.meterOnSubject && reset.antiBanding == .hz60)
+        precondition(!reset.meterOnSubject && reset.antiBanding == .hz60)
 
         // Blur-only changes must save immediately, without another camera
         // control change accidentally triggering the write for them.
@@ -75,8 +75,8 @@ struct CameraSettingsPersistenceTests {
         precondition(!CameraSettings(preferences: preferences).bokehEnabled)
 
         let effects = CameraSettings(preferences: preferences)
-        effects.focusOnSubject = false
-        precondition(!CameraSettings(preferences: preferences).focusOnSubject)
+        effects.focusOnSubject = true
+        precondition(CameraSettings(preferences: preferences).focusOnSubject)
         effects.limitAfRange = true
         precondition(CameraSettings(preferences: preferences).limitAfRange)
         effects.afRangeInfinity = 70
@@ -96,9 +96,37 @@ struct CameraSettingsPersistenceTests {
         precondition(resetFilter.animateFilters == defaults.animateFilters && resetFilter.limitAfRange)
         effects.reset()
         let resetEffects = CameraSettings(preferences: preferences)
-        precondition(resetEffects.focusOnSubject == defaults.focusOnSubject && !resetEffects.limitAfRange)
+        precondition(!resetEffects.focusOnSubject && !resetEffects.limitAfRange)
         precondition(resetEffects.afRangeInfinity == defaults.afRangeInfinity)
         precondition(resetEffects.afRangeMacro == defaults.afRangeMacro)
+
+        // A tap or automatic subject focus leaves AUTO active for this session,
+        // but a new session must scan again. Preserve manual focus and its lens
+        // position independently, and keep explicitly selected persistent modes.
+        for manual in [false, true] {
+            let focusPreferences = MemoryPreferences()
+            let focus = CameraSettings(preferences: focusPreferences)
+            focus.manualFocus = manual
+            focus.lensPosition = 187
+            focus.focusOnSubject = true
+            focus.limitAfRange = true
+            focus.afRangeInfinity = 70
+            focus.afRangeMacro = 180
+            focus.afMode = .macro
+            precondition(CameraSettings(preferences: focusPreferences).afMode == .macro)
+            focus.afMode = .auto
+            precondition(focus.afMode == .auto)
+            let restarted = CameraSettings(preferences: focusPreferences)
+            precondition(restarted.afMode == .continuousVideo && restarted.manualFocus == manual)
+            precondition(restarted.lensPosition == 187 && restarted.focusOnSubject)
+            precondition(restarted.limitAfRange && restarted.afRangeInfinity == 70 && restarted.afRangeMacro == 180)
+            for mode in [CameraSettings.AFMode.continuousVideo, .macro, .edof] {
+                focus.afMode = mode
+                let selected = CameraSettings(preferences: focusPreferences)
+                precondition(selected.afMode == mode && selected.manualFocus == manual)
+                precondition(selected.lensPosition == 187)
+            }
+        }
 
         func restore(_ json: String) -> CameraSettings {
             preferences.set(Data(json.utf8), forKey: CameraSettings.persistenceKey)
@@ -137,7 +165,7 @@ struct CameraSettingsPersistenceTests {
             let fallback = restore(json)
             precondition(fallback.brightness == 0 && fallback.lensPosition == 120 && !fallback.coldDirty)
         }
-        print("Camera settings persistence: passed controls, blur, filters, focus limits, reset, and invalid-data checks")
+        print("Camera settings persistence: passed controls, blur, filters, focus limits, one-shot restore, reset, and invalid-data checks")
     }
 }
 

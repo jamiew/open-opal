@@ -77,9 +77,9 @@ final class CameraSettings {
     var evCompensation: Int = 0 { didSet { save() } } // -9..9
     var aeLock = false { didSet { save() } }
 
-    /// Meter exposure on the person rather than the whole frame.
-    /// This runs person segmentation even with bokeh off.
-    var meterOnSubject = true { didSet { save() } }
+    /// Opt-in face metering. This runs person segmentation even with bokeh off,
+    /// so leave it disabled until the user needs help with a backlit subject.
+    var meterOnSubject = false { didSet { save() } }
 
     /// Shutter expressed the way a photographer thinks about it.
     var shutterFraction: String {
@@ -96,7 +96,7 @@ final class CameraSettings {
     var afMode: AFMode = .continuousVideo { didSet { save() } }
 
     /// Refocus on the detected face rather than letting AF re-decide for itself.
-    var focusOnSubject = true { didSet { save() } }
+    var focusOnSubject = false { didSet { save() } }
 
     /// Clamp where autofocus may hunt, in lens-position units. A desk occupies
     /// a narrow band of the lens's travel, so unrestricted AF racks past you to
@@ -278,7 +278,9 @@ final class CameraSettings {
         if let value = saved.meterOnSubject { meterOnSubject = value }
         if let value = saved.manualFocus { manualFocus = value }
         if let value = saved.lensPosition, (0...255).contains(value) { lensPosition = value }
-        if let value = saved.afMode { afMode = value }
+        // One-shot AUTO holds the result of a tap or subject focus. Starting a
+        // fresh session in that mode would leave autofocus frozen.
+        if let value = saved.afMode, value != .auto { afMode = value }
         if let value = saved.focusOnSubject { focusOnSubject = value }
         if let value = saved.limitAfRange { limitAfRange = value }
         if let far = saved.afRangeInfinity, let near = saved.afRangeMacro,
@@ -425,10 +427,10 @@ final class CameraSettings {
 
     func reset() {
         autoExposure = true; evCompensation = 0; aeLock = false
-        meterOnSubject = true
+        meterOnSubject = false
         exposureUs = 8_000; iso = 400
         manualFocus = false; afMode = .continuousVideo; lensPosition = 120
-        focusOnSubject = true
+        focusOnSubject = false
         limitAfRange = false; afRangeInfinity = 90; afRangeMacro = 160
         manualWhiteBalance = false; awbMode = .auto; whiteBalanceK = 5600; awbLock = false
         antiBanding = .hz60
