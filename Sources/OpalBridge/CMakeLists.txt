@@ -1,4 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
+# Must precede project(). Keep in step with project.yml.
+set(CMAKE_OSX_DEPLOYMENT_TARGET 14.0 CACHE STRING "Minimum macOS")
 project(OpalBridge LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -56,6 +58,9 @@ if(OPAL_BRIDGE_TEST)
     enable_testing()
     add_executable(control_delta_test test/control_delta_test.cpp)
     target_include_directories(control_delta_test PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
+    # The test compiles OpalBridge.cpp directly, so it needs the same libusb.
+    target_include_directories(control_delta_test PRIVATE
+        "${CMAKE_CURRENT_LIST_DIR}/../../vendor/install/lib/cmake/depthai/dependencies/include")
     target_link_libraries(control_delta_test PRIVATE depthai::core "${OPAL_LIBUSB}")
     set_target_properties(control_delta_test PROPERTIES
         INSTALL_RPATH "${CMAKE_CURRENT_LIST_DIR}/../../vendor/install/lib"
