@@ -13,9 +13,8 @@ Composer software; Open Opal keeps the camera working, and adds a few things.
 
 ## Fork branches
 
-`main` starts from upstream and accepts individually reviewed and tested PRs.
-`develop` combines the feature branches for integration testing, including the
-previous `main` history. Do not merge `develop` wholesale into `main`.
+`main` includes the current upstream camera fixes and this fork's signing settings.
+`filter-effects` builds on `main` for filters and Generate & Edit.
 
 `filter-effects` includes the native filters, Generate & Edit, and current
 upstream camera fixes. It requires macOS 26, including when editing manually.
