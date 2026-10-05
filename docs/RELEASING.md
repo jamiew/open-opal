@@ -30,6 +30,17 @@ compile tiny Mach-O fixtures on macOS without launching the app or camera.
 The release script runs `clean build` before packaging. This removes old bundled
 libraries whose load paths or signatures were rewritten by a previous release.
 Do the same when rebuilding a manually packaged app before packaging it again.
+
+`scripts/fetch-models.sh` publishes each download only after a successful,
+nonempty response. It compiles into a temporary directory before replacing the
+existing model. Replacement uses macOS's atomic directory exchange, so even a
+forced termination leaves the published path pointing to a complete old or new
+model. The offline script tests cover failed downloads, compilation, publication,
+and interruption.
+
+The workflow passes release tags through `RELEASE_TAG` and quotes them as data.
+Tag text must never be inserted directly into shell source.
+
 ```sh
 git tag v0.1.0
 git push origin v0.1.0
