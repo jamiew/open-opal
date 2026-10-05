@@ -5,6 +5,10 @@ extension only loads if macOS can validate it, and outside the App Store that
 means Developer ID signing *and* notarization. (`systemextensionsctl developer
 on` used to be a shortcut; recent macOS refuses it while SIP is enabled.)
 
+The extension accepts video only from the matching host signed by the same Apple
+developer team. Unsigned and ad-hoc hosts can preview the C1, but cannot feed the
+signed virtual camera. There is no unsigned-producer bypass.
+
 If you're forking this, you need your own Apple Developer account. Everything
 below is one-time setup.
 

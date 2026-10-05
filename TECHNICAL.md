@@ -53,6 +53,20 @@ linking DepthAI or accessing USB:
 python3 -m unittest discover -s scripts/tests -p 'test_boot_safety.py'
 ```
 
+Sink timing and ownership checks use real CoreMedia values without starting an
+extension service. The fixture claims the host identifier with an ad-hoc
+signature; it must still be rejected as an untrusted producer.
+
+```sh
+WORK="$(mktemp -d)"
+swiftc -swift-version 6 -parse-as-library \
+  Sources/OpenOpalCameraExtension/SinkSafety.swift \
+  Tests/CameraSinkSafetyTests.swift -o "$WORK/sink-checks"
+codesign --force --sign - --identifier com.jamiedubs.open-opal "$WORK/sink-checks"
+"$WORK/sink-checks"
+rm -rf "$WORK"
+```
+
 The autofocus control regressions are offline: they inspect real serialized
 DepthAI commands without enumerating or opening a camera. Enable the bridge test
 targets, but build and run only the offline control test as shown below. Do not
@@ -161,6 +175,11 @@ advertised format. Other input sizes are scaled to fit with black bars rather
 than stretched; native 1080p BGRA frames pass through without an extra copy.
 The feeder uses the device's output scope and playback stream. The capture
 stream serves camera clients and is not a queue for sending our frames.
+
+Only the matching host signed by the extension's Apple developer team may feed
+the playback stream. One producer owns each session. Invalid or negative
+timestamps are dropped, and late callbacks from stopped sessions are ignored.
+Unsigned and ad-hoc hosts can preview the C1 but cannot feed the signed extension.
 
 **Start OpenOpal automatically** registers a small login helper that listens
 for capture requests on "Open Opal Camera" and opens OpenOpal without taking
