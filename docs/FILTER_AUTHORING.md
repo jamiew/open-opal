@@ -47,6 +47,7 @@ text LLM alone does not implement those transformations.
 | Stable IDs, names, capabilities, categories, search | `Sources/OpenOpal/Render/CameraFilter.swift` |
 | Host settings and reset | `Sources/OpenOpal/Camera/CameraSettings.swift` |
 | Main-actor snapshot and owned frame publication | `Sources/OpenOpal/Render/BokehRenderer.swift`, `Sources/OpenOpal/CameraModel.swift` |
+| Bounded matte/depth backing storage | `Sources/OpenOpal/Render/AnalysisTexturePool.swift` |
 | GPU encoder and uniform layout | `Sources/OpenOpal/Render/CameraEffects.swift` |
 | Kernel dispatch, common geometry, original props | `Sources/OpenOpal/Render/CameraEffects.metal` |
 | Global media styles | `Sources/OpenOpal/Render/CreativeMedia.h` |
@@ -58,12 +59,25 @@ text LLM alone does not implement those transformations.
 | Recipe validation and local presets | `Sources/OpenOpal/Filters/FilterRecipe.swift`, `FilterPresetStore.swift` |
 | Local generation and draft state | `Sources/OpenOpal/Filters/FilterRecipeProvider.swift`, `FilterEditorModel.swift` |
 | Editor and synthetic preview | `Sources/OpenOpal/UI/FilterEditor.swift`, `Sources/OpenOpal/Filters/FilterDraftPreview.swift` |
-| Camera-free regression entry point | `scripts/check-filters.sh`, `tools/*filter_checks.swift`, `tools/recipe_checks.swift` |
+| Camera-free regression entry point | `scripts/check-filters.sh`, `tools/analysis_checks.swift`, `tools/*filter_checks.swift`, `tools/recipe_checks.swift` |
 
 The encoder consumes equal-size, distinct `bgra8Unorm` textures with display-
 encoded RGB values. It rejects off/invalid intensity, required-but-missing faces,
 and incompatible targets. Do not read and write the same storage in one pass.
 The output is opaque. None/zero strength skips analysis and the effect pass.
+
+Analysis results reserve a reusable texture slot until every reader finishes.
+Keep the full result alive through GPU completion, not just its texture.
+Exhausting the bounded pool drops analysis instead of overwriting retained pixels.
+Depth inference is serialized. Synchronous rendering takes the `FrameAnalysis`
+returned for that exact input buffer, not the latest asynchronous result.
+
+Pass the captured `captureGeneration` to analysis and rendering.
+`resetCaptureState()` invalidates old work, callbacks, and temporal history.
+Mode changes also invalidate delayed results. Matte and depth history read prior
+storage and write separate output storage before swapping after GPU completion.
+The color-transfer functions use matching 2.4 exponents; unfiltered video must
+round-trip a neutral video-range ramp without darkening it.
 
 The Swift/Metal ABI is five 16-byte vectors, 80 bytes total:
 

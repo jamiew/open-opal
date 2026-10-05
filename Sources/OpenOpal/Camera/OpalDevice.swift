@@ -150,16 +150,17 @@ final class OpalDevice {
         state = .connecting
         log.info("booting pipeline onto \(target.mxid, privacy: .public)")
 
+        let coldConfiguration = settings.coldConfiguration
         var cfg = OpalPipelineConfig()
-        if let scale = settings.outputMode.ispScale {
+        if let scale = coldConfiguration.outputMode.ispScale {
             cfg.ispNum = Int32(scale.num)
             cfg.ispDen = Int32(scale.den)
             cfg.keep4K = false
         } else {
             cfg.keep4K = true
         }
-        cfg.fps = Int32(settings.fps)
-        cfg.orientation = settings.rotate180 ? OPAL_ORIENT_ROTATE_180 : OPAL_ORIENT_NORMAL
+        cfg.fps = Int32(coldConfiguration.fps)
+        cfg.orientation = coldConfiguration.rotate180 ? OPAL_ORIENT_ROTATE_180 : OPAL_ORIENT_NORMAL
 
         // opal_open boots the Myriad and blocks for a couple of seconds, so keep
         // it off the main actor or the whole UI stalls mid-connect.
@@ -196,6 +197,8 @@ final class OpalDevice {
             log.warning("open attempt \(attempt) failed: \(lastError, privacy: .public)")
             try? await Task.sleep(for: .seconds(2))
         }
+
+        settings.completeColdConfiguration(coldConfiguration, opened: opened != nil)
 
         guard let opened else {
             log.error("open failed: \(lastError, privacy: .public)")
@@ -277,10 +280,8 @@ final class OpalDevice {
     /// Cold settings (resolution/fps) live in the device pipeline, so changing
     /// them means rebooting the Myriad rather than sending a control message.
     func rebuildPipeline(settings: CameraSettings) async {
-        guard handle != nil else { return }
         disconnect()
         await connect(settings: settings)
-        settings.coldDirty = false
     }
 
     /// An ISP tuning blob to load, or nil for DepthAI's defaults.

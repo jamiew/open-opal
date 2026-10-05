@@ -4,6 +4,7 @@ import Foundation
 @main
 struct CameraSettingsPersistenceTests {
     static func main() throws {
+        checkColdConfigurationCompletion()
         let preferences = MemoryPreferences()
         let initial = CameraSettings(preferences: preferences)
         let defaults = CameraSettings(preferences: MemoryPreferences())
@@ -165,7 +166,58 @@ struct CameraSettingsPersistenceTests {
             let fallback = restore(json)
             precondition(fallback.brightness == 0 && fallback.lensPosition == 120 && !fallback.coldDirty)
         }
-        print("Camera settings persistence: passed controls, blur, filters, focus limits, one-shot restore, reset, and invalid-data checks")
+        print("Camera settings persistence: passed controls, cold boot completion, blur, filters, focus limits, one-shot restore, reset, and invalid-data checks")
+    }
+
+    private static func checkColdConfigurationCompletion() {
+        let settings = CameraSettings(preferences: MemoryPreferences())
+        settings.outputMode = .hd720
+        settings.fps = 40
+        settings.rotate180 = false
+        let requested = settings.coldConfiguration
+        precondition(requested.outputMode == .hd720 && requested.fps == 40 && !requested.rotate180)
+
+        // Failure must leave the Apply button pending, even for the exact snapshot.
+        settings.completeColdConfiguration(requested, opened: false)
+        precondition(settings.coldDirty && settings.coldConfiguration == requested)
+        settings.brightness = 3
+        settings.completeColdConfiguration(requested, opened: true)
+        precondition(!settings.coldDirty)
+
+        // Every pipeline field can change while the boot is awaited.
+        let edits: [(CameraSettings) -> Void] = [
+            { $0.outputMode = .fhd1080 },
+            { $0.fps = 30 },
+            { $0.rotate180 = true }
+        ]
+        for edit in edits {
+            let opening = settings.coldConfiguration
+            edit(settings)
+            precondition(settings.coldDirty && settings.coldConfiguration != opening)
+            settings.completeColdConfiguration(opening, opened: true)
+            precondition(settings.coldDirty)
+            let latest = settings.coldConfiguration
+            settings.completeColdConfiguration(latest, opened: false)
+            precondition(settings.coldDirty)
+            settings.completeColdConfiguration(latest, opened: true)
+            precondition(!settings.coldDirty)
+        }
+
+        // A change and reversal is still a newer request, not the old boot's acknowledgment.
+        let opening = settings.coldConfiguration
+        settings.fps = 40
+        settings.fps = opening.fps
+        precondition(settings.coldConfiguration != opening)
+        settings.completeColdConfiguration(opening, opened: true)
+        precondition(settings.coldDirty)
+
+        let latest = settings.coldConfiguration
+        settings.outputMode = latest.outputMode
+        settings.fps = latest.fps
+        settings.rotate180 = latest.rotate180
+        precondition(settings.coldConfiguration == latest)
+        settings.completeColdConfiguration(latest, opened: true)
+        precondition(!settings.coldDirty)
     }
 }
 

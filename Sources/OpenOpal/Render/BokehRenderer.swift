@@ -118,6 +118,7 @@ final class BokehRenderer: @unchecked Sendable {
     /// the image. This is the one everything downstream actually uses.
     private var matteRefined: MTLTexture?
     private var size = (w: 0, h: 0)
+    private var historyReady = false
 
     /// Latest neural results, written by the analysis task and read by the
     /// render loop. Never blocks the render loop.
@@ -174,84 +175,125 @@ final class BokehRenderer: @unchecked Sendable {
 
     // MARK: - Analysis handoff
 
-    /// Thread-safe latest-value box. The analysis task publishes here whenever a
-    /// neural pass finishes; the render loop samples it. Deliberately lossy —
-    /// stale is fine, stalling is not.
-    private final class AnalysisStore: @unchecked Sendable {
+    /// Frame-paired results never pass through the asynchronous latest-value box.
+    struct FrameAnalysis: @unchecked Sendable {
+        let pixelBuffer: CVPixelBuffer
+        let generation: UInt64
+        let depth: DepthProvider.Result?
+        let matte: MatteResult?
+        let subject: SubjectInfo?
+    }
+
+    /// Latest results retain their texture leases. Generations reject work from
+    /// an earlier mode or capture session without canceling active Vision calls.
+    final class AnalysisStore: @unchecked Sendable {
         private let lock = NSLock()
-        private var _depth: MTLTexture?
-        private var _matte: MTLTexture?
+        private var _depth: DepthProvider.Result?
+        private var _matte: MatteResult?
         private var _matteBusy = false
         private var _depthBusy = false
         private var _subject: SubjectInfo?
-        private var _lastDepth: [Float] = []
-        private var _lastDepthSize = (w: 0, h: 0)
+        private var generation: UInt64 = 0
+        private var captureGeneration: UInt64 = 0
+        private var synchronous = false
 
-        /// Depth and segmentation are scheduled INDEPENDENTLY.
-        ///
-        /// They have completely different dynamics. Your outline moves every
-        /// frame; the wall behind you does not. Running them as one unit meant
-        /// the cheap, fast thing (segmentation, ~5ms) was pinned to the rate of
-        /// the expensive, slow thing (depth, ~20ms), and then both were smoothed
-        /// together — which is what made the bokeh visibly trail your head.
-        func tryBeginMatte() -> Bool {
-            lock.lock(); defer { lock.unlock() }
-            if _matteBusy { return false }
-            _matteBusy = true
-            return true
-        }
-        func endMatte() { lock.lock(); _matteBusy = false; lock.unlock() }
-
-        func tryBeginDepth() -> Bool {
-            lock.lock(); defer { lock.unlock() }
-            if _depthBusy { return false }
-            _depthBusy = true
-            return true
-        }
-        func endDepth() { lock.lock(); _depthBusy = false; lock.unlock() }
-
-        /// Keep the last depth values so a matte-only pass can still work out how
-        /// far away the subject is.
-        func storeDepthValues(_ v: [Float], w: Int, h: Int) {
-            lock.lock(); defer { lock.unlock() }
-            _lastDepth = v
-            _lastDepthSize = (w, h)
-        }
-        func depthValues() -> ([Float], Int, Int) {
-            lock.lock(); defer { lock.unlock() }
-            return (_lastDepth, _lastDepthSize.w, _lastDepthSize.h)
-        }
-
-        /// Where the subject is and how far away, smoothed. Drives both the focal
-        /// plane and exposure metering.
-        var subject: SubjectInfo? {
-            get { lock.withLock { _subject } }
-        }
-
-        func publishSubject(_ s: SubjectInfo?) {
-            lock.lock(); defer { lock.unlock() }
-            guard let s else { return }
-            if var prev = _subject {
-                // Ease toward the new estimate. The depth model is noisy frame to
-                // frame, and letting the focal plane jump around would make the
-                // whole scene visibly breathe in and out of focus.
-                prev.depth += 0.15 * (s.depth - prev.depth)
-                prev.bounds = s.bounds
-                prev.coverage = s.coverage
-                _subject = prev
-            } else {
-                _subject = s
+        func setSynchronous(_ enabled: Bool, captureGeneration expected: UInt64) -> UInt64? {
+            lock.withLock {
+                guard expected == captureGeneration else { return nil }
+                if synchronous != enabled {
+                    synchronous = enabled
+                    invalidate()
+                }
+                return generation
             }
         }
 
-        func publish(depth: MTLTexture?, matte: MTLTexture?) {
-            lock.lock(); defer { lock.unlock() }
-            if let depth { _depth = depth }
-            if let matte { _matte = matte }
+        var currentCaptureGeneration: UInt64 {
+            lock.withLock { captureGeneration }
         }
-        func latest() -> (MTLTexture?, MTLTexture?) {
-            lock.lock(); defer { lock.unlock() }
-            return (_depth, _matte)
+
+        func reset() -> UInt64 {
+            lock.withLock {
+                captureGeneration &+= 1
+                invalidate()
+                return generation
+            }
+        }
+
+        private func invalidate() {
+            generation &+= 1
+            _depth = nil
+            _matte = nil
+            _subject = nil
+        }
+
+        func isCurrent(_ token: UInt64) -> Bool {
+            lock.withLock { token == generation }
+        }
+
+        // Depth and segmentation run independently, with at most one async pass
+        // of each kind. Reset does not free a lane while its old pass is running.
+        func tryBeginMatte() -> UInt64? {
+            lock.withLock {
+                guard !synchronous, !_matteBusy else { return nil }
+                _matteBusy = true
+                return generation
+            }
+        }
+        func endMatte() { lock.withLock { _matteBusy = false } }
+
+        func tryBeginDepth() -> UInt64? {
+            lock.withLock {
+                guard !synchronous, !_depthBusy else { return nil }
+                _depthBusy = true
+                return generation
+            }
+        }
+        func endDepth() { lock.withLock { _depthBusy = false } }
+
+        func publishDepth(_ depth: DepthProvider.Result, generation token: UInt64) {
+            lock.withLock {
+                guard token == generation, !synchronous else { return }
+                _depth = depth
+            }
+        }
+
+        func depthValues() -> ([Float], Int, Int) {
+            lock.withLock { (_depth?.values ?? [], _depth?.width ?? 0, _depth?.height ?? 0) }
+        }
+
+        func publishMatte(_ matte: MatteResult, subject: SubjectInfo?,
+                          generation token: UInt64) -> SubjectInfo? {
+            lock.withLock {
+                guard token == generation, !synchronous else { return nil }
+                _matte = matte
+                return updateSubject(subject)
+            }
+        }
+
+        func publishSynchronousSubject(_ subject: SubjectInfo?,
+                                       generation token: UInt64) -> SubjectInfo? {
+            lock.withLock {
+                guard token == generation, synchronous else { return nil }
+                return updateSubject(subject)
+            }
+        }
+
+        private func updateSubject(_ subject: SubjectInfo?) -> SubjectInfo? {
+            guard let subject else { return nil }
+            if var previous = _subject {
+                previous.depth += 0.15 * (subject.depth - previous.depth)
+                previous.bounds = subject.bounds
+                previous.coverage = subject.coverage
+                _subject = previous
+            } else {
+                _subject = subject
+            }
+            return _subject
+        }
+
+        func latest() -> (DepthProvider.Result?, MatteResult?, SubjectInfo?) {
+            lock.withLock { (_depth, _matte, _subject) }
         }
     }
 
@@ -270,9 +312,18 @@ final class BokehRenderer: @unchecked Sendable {
     /// Renders into an owned, pool-backed BGRA frame shared by preview and sink.
     /// Completion is awaited on the render worker, never on the main actor.
     /// `nil` drops a frame rather than publishing incomplete or recycled pixels.
-    func render(pixelBuffer: CVPixelBuffer, settings: RenderSettings) -> RenderedFrame? {
+    func render(pixelBuffer: CVPixelBuffer, settings: RenderSettings,
+                captureGeneration: UInt64, analysisForFrame: FrameAnalysis? = nil) -> RenderedFrame? {
         renderLock.lock()
         defer { renderLock.unlock() }
+        let syncing = settings.bokehEnabled && settings.syncBokeh
+        guard let generation = analysis.setSynchronous(syncing, captureGeneration: captureGeneration)
+        else { return nil }
+        if syncing {
+            guard let analysisForFrame,
+                  analysisForFrame.pixelBuffer === pixelBuffer,
+                  analysisForFrame.generation == generation else { return nil }
+        }
 
         let w = CVPixelBufferGetWidth(pixelBuffer)
         let h = CVPixelBufferGetHeight(pixelBuffer)
@@ -309,7 +360,6 @@ final class BokehRenderer: @unchecked Sendable {
         guard encode(cmd, nv12Pipeline, textures: [luma.texture, chroma.texture, linearTex],
                      size: (w, h)) else { return nil }
 
-        let syncing = settings.bokehEnabled && settings.syncBokeh
         if !syncing && (settings.bokehEnabled || settings.meterOnSubject || settings.focusOnSubject) {
             kickOffAnalysisIfIdle(pixelBuffer: pixelBuffer,
                                   needsDepth: settings.bokehEnabled && !settings.uniformBlur)
@@ -317,30 +367,36 @@ final class BokehRenderer: @unchecked Sendable {
 
         var compositeBlur = linearTex
         var compositeCoC = blackTexture()
-        var updatedDepthHistory = false
-        let (depth, matte) = analysis.latest()
-        let u = uniforms(settings, w: w, h: h)
+        var updatedHistory = false
+        let latest = syncing
+            ? (analysisForFrame?.depth, analysisForFrame?.matte, analysisForFrame?.subject)
+            : analysis.latest()
+        let depth = latest.0?.texture
+        let matte = latest.1?.texture
+        let u = uniforms(settings, subject: latest.2, w: w, h: h)
         // One common composite and filter exit handles bokeh off, missing neural
         // results, missing bokeh intermediates, and the complete bokeh path.
         if settings.bokehEnabled, let matte, let cocTex, let blurTex,
-           let depthHistory, let depthHistoryPrev, let matteHistory, let matteRefined,
+           let depthHistory, let depthHistoryPrev, let matteHistory,
+           let matteHistoryPrev, let matteRefined,
            let depth = depth ?? (settings.uniformBlur ? blackTexture() : nil) {
-            var matteAlpha: Float = 0.6
-            guard encode(cmd, smoothPipeline, textures: [matte, matteHistory, matteHistory],
+            var matteAlpha: Float = historyReady ? 0.6 : 1
+            guard encode(cmd, smoothPipeline,
+                         textures: [matte, historyReady ? matteHistory : blackTexture(), matteHistoryPrev],
                          buffer: &matteAlpha,
-                         size: (matteHistory.width, matteHistory.height)),
+                         size: (matteHistoryPrev.width, matteHistoryPrev.height)),
                   encode(cmd, matteRefinePipeline,
-                         textures: [matteHistory, linearTex, matteRefined], size: (w, h)) else { return nil }
+                         textures: [matteHistoryPrev, linearTex, matteRefined], size: (w, h)) else { return nil }
             var depthAlpha: Float = 0.35
             guard encode(cmd, depthSmoothPipeline,
-                         textures: [depth, matteRefined, depthHistory, depthHistoryPrev],
+                         textures: [depth, matteRefined, historyReady ? depthHistory : blackTexture(), depthHistoryPrev],
                          buffer: &depthAlpha,
                          size: (depthHistory.width, depthHistory.height)),
                   encode(cmd, cocPipeline, textures: [depthHistoryPrev, matteRefined, cocTex],
                          uniforms: u, size: (w, h)),
                   encode(cmd, gatherPipeline, textures: [linearTex, cocTex, blurTex],
                          uniforms: u, size: (w, h)) else { return nil }
-            updatedDepthHistory = true
+            updatedHistory = true
             compositeBlur = blurTex
             compositeCoC = cocTex
         }
@@ -358,7 +414,7 @@ final class BokehRenderer: @unchecked Sendable {
         // Core Video's texture wrappers and source buffer must outlive GPU use.
         // The wait also prevents shared bokeh/effect scratch textures from being
         // mutated by the next frame while this frame still uses them.
-        withExtendedLifetime((pixelBuffer, luma, chroma, output)) {
+        withExtendedLifetime((pixelBuffer, luma, chroma, output, latest, analysisForFrame)) {
             cmd.commit()
             cmd.waitUntilCompleted()
         }
@@ -366,14 +422,31 @@ final class BokehRenderer: @unchecked Sendable {
             log.error("frame render failed: \(cmd.error?.localizedDescription ?? "unknown GPU error", privacy: .public)")
             return nil
         }
-        if updatedDepthHistory { swap(&self.depthHistory, &self.depthHistoryPrev) }
+        if updatedHistory {
+            swap(&self.depthHistory, &self.depthHistoryPrev)
+            swap(&self.matteHistory, &self.matteHistoryPrev)
+            historyReady = true
+        }
         return output
     }
 
-    /// Invalidates an in-flight landmark result when capture stops/restarts.
-    func resetFaceTracking() {
-        faceTracker.reset()
+    /// Reject old analysis and clear temporal state before another capture session.
+    func resetCaptureState() {
+        renderLock.withLock {
+            let generation = analysis.reset()
+            faceTracker.reset()
+            depthProvider?.reset(generation: generation)
+            matteProvider?.reset(generation: generation)
+            historyReady = false
+            frameIndex = 0
+        }
     }
+
+    func isCurrentAnalysisGeneration(_ generation: UInt64) -> Bool {
+        analysis.isCurrent(generation)
+    }
+
+    var captureGeneration: UInt64 { analysis.currentCaptureGeneration }
 
     /// Runs depth + segmentation off the render path. If a previous pass is
     /// still in flight we simply skip this frame — the render loop keeps using
@@ -396,11 +469,10 @@ final class BokehRenderer: @unchecked Sendable {
         frameIndex &+= 1
 
         // --- segmentation: every frame. It's what tracks you. ---
-        if let matteProvider, store.tryBeginMatte() {
+        if let matteProvider, let generation = store.tryBeginMatte() {
             Task.detached(priority: .userInitiated) {
-                if let m = await matteProvider.matte(from: box.buffer) {
-                    store.publish(depth: nil, matte: m.texture)
-
+                defer { store.endMatte() }
+                if let m = await matteProvider.matte(from: box.buffer, generation: generation) {
                     // Use the most recent depth map (a few frames old at worst —
                     // the background hasn't moved) to work out how far away the
                     // subject is.
@@ -409,31 +481,35 @@ final class BokehRenderer: @unchecked Sendable {
                         ? SubjectAnalysis.locate(matte: m)
                         : SubjectAnalysis.analyze(matte: m, depth: values,
                                                   depthWidth: dw, depthHeight: dh)
-                    if let subject {
-                        store.publishSubject(subject)
-                        if let s = store.subject { onSubject?(s) }
+                    if let subject = store.publishMatte(m, subject: subject, generation: generation),
+                       store.isCurrent(generation) {
+                        onSubject?(subject, generation)
                     }
                 }
-                store.endMatte()
             }
         }
 
         // --- depth: occasionally, and only when bokeh actually needs it. ---
         guard needsDepth, let depthProvider else { return }
-        guard frameIndex % Self.depthInterval == 0, store.tryBeginDepth() else { return }
+        guard frameIndex % Self.depthInterval == 0,
+              let generation = store.tryBeginDepth() else { return }
 
         Task.detached(priority: .userInitiated) {
-            if let d = await depthProvider.depth(from: box.buffer) {
-                store.publish(depth: d.texture, matte: nil)
-                store.storeDepthValues(d.values, w: d.width, h: d.height)
+            defer { store.endDepth() }
+            if let d = await depthProvider.depth(from: box.buffer, generation: generation) {
+                store.publishDepth(d, generation: generation)
             }
-            store.endDepth()
         }
     }
 
     /// Fired whenever we get a fresh read on the subject. CameraModel uses it to
     /// meter exposure on the person rather than the whole frame.
-    var onSubject: (@Sendable (SubjectInfo) -> Void)?
+    private let callbackLock = NSLock()
+    private var _onSubject: (@Sendable (SubjectInfo, UInt64) -> Void)?
+    var onSubject: (@Sendable (SubjectInfo, UInt64) -> Void)? {
+        get { callbackLock.withLock { _onSubject } }
+        set { callbackLock.withLock { _onSubject = newValue } }
+    }
 
     /// Compute the mask (and optionally depth) for THIS frame, and wait for it.
     ///
@@ -441,27 +517,30 @@ final class BokehRenderer: @unchecked Sendable {
     /// about to composite, not one from 60ms ago. This is the whole point of
     /// "sync" mode — the trailing edge is a synchronisation problem, not a
     /// filtering one.
-    func analyzeNow(pixelBuffer: CVPixelBuffer, needsDepth: Bool) async {
+    func analyzeNow(pixelBuffer: CVPixelBuffer, needsDepth: Bool,
+                    captureGeneration: UInt64) async -> FrameAnalysis? {
+        guard let generation = analysis.setSynchronous(true, captureGeneration: captureGeneration)
+        else { return nil }
         let box = BufferBox(buffer: pixelBuffer)
+        let onSubject = self.onSubject
 
-        async let matteTask = matteProvider?.matte(from: box.buffer)
-        async let depthTask = needsDepth ? depthProvider?.depth(from: box.buffer) : nil
-        let (m, d) = await (matteTask, depthTask)
+        async let matteTask = matteProvider?.matte(from: box.buffer, generation: generation)
+        async let depthTask = needsDepth ? depthProvider?.depth(from: box.buffer, generation: generation) : nil
+        let (matte, depth) = await (matteTask, depthTask)
 
-        analysis.publish(depth: d?.texture, matte: m?.texture)
-        if let d { analysis.storeDepthValues(d.values, w: d.width, h: d.height) }
-
-        if let m {
-            let (values, dw, dh) = analysis.depthValues()
-            let subject: SubjectInfo? = values.isEmpty
-                ? SubjectAnalysis.locate(matte: m)
-                : SubjectAnalysis.analyze(matte: m, depth: values,
-                                          depthWidth: dw, depthHeight: dh)
-            if let subject {
-                analysis.publishSubject(subject)
-                if let s = analysis.subject { onSubject?(s) }
+        let subject = matte.flatMap { matte in
+            if let depth {
+                return SubjectAnalysis.analyze(matte: matte, depth: depth.values,
+                                               depthWidth: depth.width, depthHeight: depth.height)
             }
+            return SubjectAnalysis.locate(matte: matte)
         }
+        if let smoothed = analysis.publishSynchronousSubject(subject, generation: generation),
+           analysis.isCurrent(generation) {
+            onSubject?(smoothed, generation)
+        }
+        return FrameAnalysis(pixelBuffer: pixelBuffer, generation: generation,
+                             depth: depth, matte: matte, subject: subject)
     }
 
     // MARK: - Owned frame output
@@ -509,7 +588,7 @@ final class BokehRenderer: @unchecked Sendable {
 
     // MARK: - Plumbing
 
-    private func uniforms(_ s: RenderSettings, w: Int, h: Int) -> Uniforms {
+    private func uniforms(_ s: RenderSettings, subject: SubjectInfo?, w: Int, h: Int) -> Uniforms {
         // Scale the blur with resolution so f/2.8 looks the same at 720p as at
         // 4K, instead of getting weaker as pixels get smaller.
         let maxCoC = Float(h) * 0.025
@@ -520,7 +599,7 @@ final class BokehRenderer: @unchecked Sendable {
         // "track subject" tracked precisely nothing and the blur was measuring
         // distance from an arbitrary plane in space.
         let focus: Float = s.autoFocusSubject
-            ? (analysis.subject?.depth ?? Float(s.focusDistance))
+            ? (subject?.depth ?? Float(s.focusDistance))
             : Float(s.focusDistance)
 
         return Uniforms(
@@ -556,6 +635,7 @@ final class BokehRenderer: @unchecked Sendable {
 
     private func allocate(w: Int, h: Int) {
         size = (w, h)
+        historyReady = false
         func make(_ fmt: MTLPixelFormat, _ tw: Int, _ th: Int) -> MTLTexture? {
             let d = MTLTextureDescriptor.texture2DDescriptor(
                 pixelFormat: fmt, width: tw, height: th, mipmapped: false)

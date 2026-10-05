@@ -15,6 +15,7 @@ xcrun swiftc -swift-version 6 -parse-as-library \
     "$ROOT/Sources/OpenOpal/Camera/CameraSettings.swift" \
     "$ROOT/Sources/OpenOpal/VirtualCamera/VirtualCameraFrameConverter.swift" \
     "$ROOT/tools/filter_checks.swift" \
+    "$ROOT/tools/analysis_checks.swift" \
     "$ROOT/tools/creative_filter_checks.swift" \
     "$ROOT/tools/portrait_filter_checks.swift" \
     -o "$WORK/filter-checks"

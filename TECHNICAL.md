@@ -67,6 +67,30 @@ codesign --force --sign - --identifier com.jamiedubs.open-opal "$WORK/sink-check
 rm -rf "$WORK"
 ```
 
+Cold settings remain pending until the exact captured revision opens successfully.
+Editing resolution, FPS, or rotation during a boot does not erase newer changes.
+Reconnect also clears exposure-metering history, so an unmoved subject receives
+its first region in the new pipeline.
+
+```sh
+WORK="$(mktemp -d)"
+swiftc -swift-version 6 -parse-as-library \
+  Sources/OpenOpal/Render/CameraFilter.swift \
+  Sources/OpenOpal/Camera/CameraSettings.swift \
+  Tests/CameraSettingsPersistenceTests.swift -o "$WORK/settings-checks"
+"$WORK/settings-checks"
+swiftc -swift-version 6 -parse-as-library \
+  Sources/OpenOpal/Camera/SubjectMeteringSession.swift \
+  Tests/SubjectMeteringSessionTests.swift -o "$WORK/metering-checks"
+"$WORK/metering-checks"
+rm -rf "$WORK"
+bash scripts/check-filters.sh
+```
+
+The filter checks use generated pixels. They cover neutral brightness, retained
+analysis storage, GPU completion, frame-paired masks, and mode/session changes.
+They do not establish live tracking quality or installed virtual-camera output.
+
 The autofocus control regressions are offline: they inspect real serialized
 DepthAI commands without enumerating or opening a camera. Enable the bridge test
 targets, but build and run only the offline control test as shown below. Do not
