@@ -56,8 +56,9 @@ python3 -m unittest discover -s scripts/tests -p 'test_boot_safety.py'
 ```
 
 The native regressions inspect serialized autofocus commands and check USB-only
-discovery. Discovery hides USB devices and blocks Internet socket calls. It
-calibrates socket observation before checking for zero discovery attempts.
+discovery. The USB-only test hides USB devices and blocks Internet sockets, then
+checks that DepthAI discovery makes no network attempts. It first confirms the
+socket blocker is active, so a zero count means something.
 CI runs both regressions. Do not run `bridge_test` or `region_test` without a
 camera: those are manual hardware probes.
 

@@ -77,7 +77,7 @@ if(OPAL_BRIDGE_TEST)
         "${CMAKE_CURRENT_LIST_DIR}/../../vendor/install/lib/cmake/depthai/dependencies/include")
     target_link_libraries(usb_only_test PRIVATE depthai::core usb_only_observer)
     set_target_properties(usb_only_test PROPERTIES
-        INSTALL_RPATH "${CMAKE_CURRENT_LIST_DIR}/../../vendor/install/lib"
+        INSTALL_RPATH "@executable_path;${CMAKE_CURRENT_LIST_DIR}/../../vendor/install/lib"
         BUILD_WITH_INSTALL_RPATH TRUE)
     add_test(NAME usb_only COMMAND usb_only_test)
     set_tests_properties(usb_only PROPERTIES
