@@ -29,6 +29,7 @@ private let log = Logger(subsystem: "com.openopal", category: "depth")
 ///     no-op. It's dealt with downstream, by temporal smoothing in the shader.
 final class DepthProvider: @unchecked Sendable {
 
+    private let inferenceLock = NSLock()
     private let device: MTLDevice
     private let model: VNCoreMLModel
     private let request: VNCoreMLRequest
@@ -83,14 +84,17 @@ final class DepthProvider: @unchecked Sendable {
     private var previous: [Float] = []
 
     func depth(from pixelBuffer: CVPixelBuffer) async -> Result? {
-        do {
-            try sequence.perform([request], on: pixelBuffer)
-        } catch {
-            log.error("depth inference failed: \(error.localizedDescription, privacy: .public)")
-            return nil
+        // Both analysis modes share this request, handler, and alignment history.
+        inferenceLock.withLock {
+            do {
+                try sequence.perform([request], on: pixelBuffer)
+            } catch {
+                log.error("depth inference failed: \(error.localizedDescription, privacy: .public)")
+                return nil
+            }
+            guard let obs = request.results?.first as? VNPixelBufferObservation else { return nil }
+            return normalizeAndUpload(obs.pixelBuffer)
         }
-        guard let obs = request.results?.first as? VNPixelBufferObservation else { return nil }
-        return normalizeAndUpload(obs.pixelBuffer)
     }
 
     /// Fit this frame onto the previous one with a single scale and shift.

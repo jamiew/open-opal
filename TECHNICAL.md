@@ -129,6 +129,9 @@ optional depth-graded mode uses
 [Depth Anything V2](https://huggingface.co/apple/coreml-depth-anything-v2-small)
 for distance-based falloff.
 
+Depth analysis runs one inference at a time, including switches between
+background and frame-paired analysis.
+
 ### Autofocus
 
 “Follow face” uses the upper-middle of the segmented person's box as an estimate
