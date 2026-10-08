@@ -68,8 +68,8 @@ final class CameraModel {
     private var nextSequence = 0
     private var presentedSequence = -1
 
-    /// Last AE region sent to the current pipeline.
-    private var lastMeteredRect: CGRect?
+    /// Exposure history and tap holds are scoped to the capture pipeline.
+    private var meteringSession = SubjectMeteringSession()
     private var lastFocusArea: CGFloat?
     private var focusCooldownUntil: Date?
     private var captureGeneration: UInt64 = 0
@@ -77,6 +77,7 @@ final class CameraModel {
     private func resetCaptureTracking() {
         captureGeneration = gate.invalidate()
         resetFocusTracking()
+        meteringSession.reset()
         renderer?.resetCaptureState()
         configureSubjectTracking()
         configureFrameDelivery()
@@ -219,33 +220,14 @@ final class CameraModel {
         // The device drops into one-shot AF so the focus holds; reflect that in
         // the UI rather than leaving the picker lying about the mode.
         settings.afMode = .auto
-        meteringSuspendedUntil = Date().addingTimeInterval(5)
-        lastMeteredRect = nil
+        meteringSession.suspend(until: Date().addingTimeInterval(5))
     }
-
-    private var meteringSuspendedUntil: Date?
 
     /// Point auto-exposure at the person. Only fires when they've actually moved,
     /// and only while AE is doing the deciding.
     private func meter(on subject: SubjectInfo) {
         guard settings.meterOnSubject, settings.autoExposure, device.state.isLive else { return }
-        if let until = meteringSuspendedUntil, Date() < until { return }
-
-        // Meter on the upper-middle of the subject's box — that's where a face
-        // lives. Metering the full body drags in a lot of torso and desk.
-        let b = subject.bounds
-        let rect = CGRect(x: b.minX + b.width * 0.2,
-                          y: b.minY,
-                          width: b.width * 0.6,
-                          height: max(b.height * 0.45, 0.05))
-
-        if let last = lastMeteredRect {
-            // Dead-band: ignore small shifts, or AE hunts every time you breathe.
-            let moved = abs(rect.midX - last.midX) + abs(rect.midY - last.midY)
-                      + abs(rect.width - last.width) + abs(rect.height - last.height)
-            guard moved > 0.06 else { return }
-        }
-        lastMeteredRect = rect
+        guard let rect = meteringSession.region(for: subject.bounds, at: Date()) else { return }
         device.meterExposure(on: rect)
     }
 
