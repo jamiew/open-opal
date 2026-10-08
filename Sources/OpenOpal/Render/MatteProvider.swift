@@ -64,12 +64,14 @@ final class MatteProvider: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         guard q != quality else { return }
         quality = q
-        let level: VNGeneratePersonSegmentationRequest.QualityLevel = switch q {
+    }
+
+    private func qualityLevel() -> VNGeneratePersonSegmentationRequest.QualityLevel {
+        switch quality {
         case .fast:     .fast
         case .balanced: .balanced
         case .accurate: .accurate
         }
-        for lane in lanes { lane.request.qualityLevel = level }
     }
 
     /// Nil if every lane is busy — the caller should drop this frame rather than
@@ -78,6 +80,8 @@ final class MatteProvider: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         guard let lane = lanes.first(where: { !$0.inUse }) else { return nil }
         lane.inUse = true
+        // Vision may still be using the other lanes' requests.
+        lane.request.qualityLevel = qualityLevel()
         return lane
     }
 

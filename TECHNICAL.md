@@ -130,7 +130,8 @@ optional depth-graded mode uses
 for distance-based falloff.
 
 Depth analysis runs one inference at a time, including switches between
-background and frame-paired analysis.
+background and frame-paired analysis. Matte quality changes take effect when
+an idle analysis lane starts its next frame, not during a running Vision request.
 
 ### Autofocus
 
