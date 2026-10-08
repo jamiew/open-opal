@@ -66,3 +66,15 @@ target macOS 14 regardless of the runner, and `bundle-dependencies.py` fails
 the release if any bundled library needs a newer macOS than that. The first run builds depthai-core
 from source (~several minutes); it's cached afterward and only rebuilds when
 `scripts/bootstrap.sh` or `patches/` change.
+
+## Release names
+
+Packaging and notarization receive the tag through the `RELEASE_TAG` environment
+variable and quote it as filename data. Tags are never inserted into shell
+source: a valid Git tag can contain shell command substitution. The release
+action's `files` input remains data, not shell code.
+
+The offline release-name tests run with
+`python3 -m unittest discover -s scripts/tests -p test_release_names.py -v`.
+They execute the workflow's shell steps using local DMG and notary fixtures,
+including tags containing shell syntax. They do not sign or notarize artifacts.
