@@ -43,6 +43,19 @@ file. Only a successful, nonempty download replaces the cached member, so a
 failed or interrupted download is fetched again on the next run. Exit, interrupt,
 and termination traps remove only the temporary file owned by that run.
 
+## Compiled model publication
+
+Compilation writes into a unique staging directory beside the published model.
+On macOS, a small native helper uses `renamex_np(RENAME_SWAP)` to exchange the
+complete old and new directories in one operation. The published path never
+disappears during replacement, and compile or exchange failures keep the old
+model. A first install renames the complete staged model into place.
+
+Normal exits and catchable interruptions remove this run's staging directory.
+`SIGKILL` cannot run cleanup, so it may leave a `.compile.*` directory behind,
+but the published path still contains the complete old or new model. Later runs
+use their own staging directories and do not remove another run's files.
+
 ## One-time: repository secrets
 
 The CI can't sign or notarize without these. Add them under
