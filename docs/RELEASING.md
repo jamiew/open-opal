@@ -30,11 +30,31 @@ compile tiny Mach-O fixtures on macOS without launching the app or camera.
 The release script runs `clean build` before packaging. This removes old bundled
 libraries whose load paths or signatures were rewritten by a previous release.
 Do the same when rebuilding a manually packaged app before packaging it again.
-
 ```sh
 git tag v0.1.0
 git push origin v0.1.0
 ```
+
+## Camera-free control checks
+
+These standalone checks use isolated preferences and launch-policy state. They
+do not open a camera, register the helper, or activate the extension.
+
+```sh
+swiftc -swift-version 6 Sources/OpenOpal/Render/CameraFilter.swift \
+  Sources/OpenOpal/Camera/CameraSettings.swift \
+  Tests/CameraSettingsPersistenceTests.swift -o /tmp/opal-settings-checks
+/tmp/opal-settings-checks
+swiftc -swift-version 6 Sources/OpenOpalLauncher/CameraLaunchPolicy.swift \
+  Tests/CameraLaunchPolicyTests.swift -o /tmp/opal-launch-checks
+/tmp/opal-launch-checks
+```
+
+The integration also passed an unsigned app, extension, and helper build using
+existing native libraries. Synthetic feeder checks covered sink selection,
+numbered-frame delivery, conversion, queue-full drops, and failed-enqueue
+ownership. These checks do not establish installed-extension or live-camera
+behavior.
 
 ## One-time: repository secrets
 
@@ -60,9 +80,9 @@ capabilities. Use this team's certificate and profiles, regenerate them per
 
 ## Runner
 
-The workflow uses `runs-on: macos-26` for Xcode 26 / the Liquid Glass SDK.
-Move it (and `build.yml`) to `macos-27` once GitHub offers that image. Builds
-target macOS 14 regardless of the runner, and `bundle-dependencies.py` fails
-the release if any bundled library needs a newer macOS than that. The first run builds depthai-core
-from source (~several minutes); it's cached afterward and only rebuilds when
-`scripts/bootstrap.sh` or `patches/` change.
+The workflow uses `runs-on: macos-26` for Xcode 26 and the Liquid Glass SDK.
+This experimental branch targets macOS 26 because its editor uses Foundation
+Models. `bundle-dependencies.py` rejects bundled libraries that require a newer
+macOS than the app declares. Upstream's macOS 14 target does not apply here.
+The first run builds depthai-core from source and caches it. Changes to
+`scripts/bootstrap.sh` or `patches/` rebuild it.

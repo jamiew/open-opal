@@ -6,10 +6,11 @@ hardware. For signing and releases, see [docs/SIGNING.md](docs/SIGNING.md) and
 
 ## Building
 
-Open Opal runs on Apple silicon Macs with macOS 14 (Sonoma) or later. Liquid
-Glass appears on macOS 26 and later; older versions get the classic look.
+This experimental branch runs on Apple silicon Macs with macOS 26 or later.
+Its native Generate & Edit panel uses Foundation Models. Upstream's app without
+these filters supports macOS 14; the compatibility wrappers remain shared here.
 
-Building needs macOS 27, Xcode 27, and `brew install cmake ninja xcodegen`.
+Building needs Xcode 26 or newer and `brew install cmake ninja xcodegen`.
 
 ```sh
 ./scripts/bootstrap.sh     # fetches and builds depthai-core
@@ -140,6 +141,9 @@ changing autofocus mode, or focusing on a region. Turning the limit off restores
 the full 0–255 range. Exposure and other unrelated control changes do not restart
 autofocus. Entering manual focus clears the tracking history immediately, so
 returning to automatic focus can refocus even if the person's size has not changed.
+
+Without a user limit, autofocus mode changes preserve the camera's tuned range.
+Saved one-shot autofocus restores as Continuous when the app starts again.
 
 ### Tuning files
 

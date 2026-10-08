@@ -12,7 +12,7 @@ private let log = Logger(subsystem: "com.openopal", category: "render")
 /// into Metal textures via CVMetalTextureCache — no copy, no CPU colour
 /// conversion. From there:
 ///
-///     NV12 ──► linear RGB ──► [depth + matte] ──► CoC ──► gather ──► composite
+///     NV12 ──► linear RGB ──► [depth + matte] ──► CoC ──► gather ──► composite ──► filters
 ///
 /// The neural nets are deliberately *not* in that chain. They run asynchronously
 /// at their own pace on the Neural Engine, and the render loop always uses the
@@ -37,6 +37,9 @@ struct RenderSettings: Sendable {
     var aperture: Double
     var hexIris: Bool
     var highlightBloom: Double
+    var filter: CameraFilter
+    var filterIntensity: Double
+    var animateFilters: Bool
 
     @MainActor
     init(_ s: CameraSettings) {
@@ -53,7 +56,18 @@ struct RenderSettings: Sendable {
         aperture = s.aperture
         hexIris = s.apertureShape == .hexagonal
         highlightBloom = s.highlightBloom
+        filter = s.filter
+        filterIntensity = s.filterIntensity
+        animateFilters = s.animateFilters
     }
+}
+
+/// Immutable published pixels. Keeping the pixel buffer and its Core Video
+/// texture wrapper alive prevents the pool from recycling a preview's storage.
+struct RenderedFrame: @unchecked Sendable {
+    let texture: MTLTexture
+    let pixelBuffer: CVPixelBuffer
+    fileprivate let backing: CVMetalTexture
 }
 
 /// `@unchecked Sendable`: render() serializes itself with a lock, the analysis
@@ -76,12 +90,16 @@ final class BokehRenderer: @unchecked Sendable {
     private let depthSmoothPipeline: MTLComputePipelineState
     private let matteRefinePipeline: MTLComputePipelineState
     private let matteStabilizePipeline: MTLComputePipelineState
+    private let effects: CameraEffects
+    private let faceTracker = FaceTracker()
+    private let effectsEpoch = ProcessInfo.processInfo.systemUptime
 
     // Intermediates, reallocated only when the frame size changes.
     private var linearTex: MTLTexture?
     private var cocTex: MTLTexture?
     private var blurTex: MTLTexture?
-    private var outputTex: MTLTexture?
+    /// Allocated lazily only when an effect actually has something to draw.
+    private var effectInput: MTLTexture?
     private var depthTex: MTLTexture?
     private var matteTex: MTLTexture?
     // Ping-pong: depth_smooth reads one and writes the other, because it now
@@ -143,11 +161,13 @@ final class BokehRenderer: @unchecked Sendable {
               let e = pipeline("temporal_smooth"),
               let f = pipeline("depth_smooth"),
               let g = pipeline("matte_refine"),
-              let i = pipeline("matte_stabilize") else { return nil }
+              let i = pipeline("matte_stabilize"),
+              let effects = CameraEffects(device: device, library: library) else { return nil }
 
         nv12Pipeline = a; cocPipeline = b; gatherPipeline = c
         compositePipeline = d; smoothPipeline = e; depthSmoothPipeline = f
         matteRefinePipeline = g; matteStabilizePipeline = i
+        self.effects = effects
 
         CVMetalTextureCacheCreate(nil, nil, device, nil, &textureCache)
     }
@@ -247,117 +267,112 @@ final class BokehRenderer: @unchecked Sendable {
 
     // MARK: - Frame
 
-    /// Renders one frame. Returns a BGRA texture ready for display and for the
-    /// virtual camera. `nil` means "nothing to draw".
-    func render(pixelBuffer: CVPixelBuffer, settings: RenderSettings) -> MTLTexture? {
+    /// Renders into an owned, pool-backed BGRA frame shared by preview and sink.
+    /// Completion is awaited on the render worker, never on the main actor.
+    /// `nil` drops a frame rather than publishing incomplete or recycled pixels.
+    func render(pixelBuffer: CVPixelBuffer, settings: RenderSettings) -> RenderedFrame? {
         renderLock.lock()
         defer { renderLock.unlock() }
 
         let w = CVPixelBufferGetWidth(pixelBuffer)
         let h = CVPixelBufferGetHeight(pixelBuffer)
+        let face = faceTracker.update(
+            pixelBuffer: pixelBuffer,
+            enabled: settings.filter.requiresFace && settings.filterIntensity.isFinite &&
+                settings.filterIntensity > 0)
 
         guard let luma = makeTexture(pixelBuffer, plane: 0, format: .r8Unorm),
               let chroma = makeTexture(pixelBuffer, plane: 1, format: .rg8Unorm) else { return nil }
-
         if size != (w, h) { allocate(w: w, h: h) }
-        guard let linearTex, let outputTex else { return nil }
+        guard let linearTex, let output = makeOutputFrame(w: w, h: h),
+              let cmd = queue.makeCommandBuffer() else { return nil }
 
-        guard let cmd = queue.makeCommandBuffer() else { return nil }
+        let filtering = CameraEffects.isActive(filter: settings.filter,
+                                                intensity: settings.filterIntensity, face: face)
+        let compositeTarget: MTLTexture
+        if filtering {
+            if effectInput == nil {
+                let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+                    pixelFormat: .bgra8Unorm, width: w, height: h, mipmapped: false)
+                descriptor.usage = [.shaderRead, .shaderWrite]
+                descriptor.storageMode = .private
+                effectInput = device.makeTexture(descriptor: descriptor)
+            }
+            guard let effectInput else { return nil }
+            compositeTarget = effectInput
+        } else {
+            // Off, zero strength, or absent face: no new full-frame filter pass
+            // or intermediate allocation; composite directly into owned output.
+            compositeTarget = output.texture
+        }
 
-        // 1. NV12 -> linear RGB (on the GPU; the CPU never sees a pixel).
-        encode(cmd, nv12Pipeline, textures: [luma, chroma, linearTex], size: (w, h))
+        guard encode(cmd, nv12Pipeline, textures: [luma.texture, chroma.texture, linearTex],
+                     size: (w, h)) else { return nil }
 
-        // Segmentation feeds TWO features, not just bokeh: it also tells the
-        // camera where to meter. Gating the whole analysis pass behind
-        // `bokehEnabled` meant "meter on me" silently did nothing whenever bokeh
-        // was off — which is most of the time.
-        //
-        // In sync mode the caller has already run analyzeNow() for this exact
-        // frame, so there's nothing to kick off here.
         let syncing = settings.bokehEnabled && settings.syncBokeh
         if !syncing && (settings.bokehEnabled || settings.meterOnSubject || settings.focusOnSubject) {
             kickOffAnalysisIfIdle(pixelBuffer: pixelBuffer,
                                   needsDepth: settings.bokehEnabled && !settings.uniformBlur)
         }
 
-        guard settings.bokehEnabled else {
-            // No bokeh: still need to get out of linear space for display.
-            encode(cmd, compositePipeline,
-                   textures: [linearTex, linearTex, blackTexture(), outputTex],
-                   uniforms: uniforms(settings, w: w, h: h), size: (w, h))
-            cmd.commit()
-            return outputTex
-        }
-
+        var compositeBlur = linearTex
+        var compositeCoC = blackTexture()
+        var updatedDepthHistory = false
         let (depth, matte) = analysis.latest()
-
-        // Uniform blur needs only the mask — that's the entire point of it. Don't
-        // hold the frame hostage to a depth map it isn't going to look at.
-        let needDepth = !settings.uniformBlur
-
-        guard let matte, let cocTex, let blurTex,
-              let depthHistory, let matteHistory,
-              let depth = depth ?? (needDepth ? nil : blackTexture()) else {
-            // Neural results not ready yet (first frame or two). Pass through
-            // rather than showing a blur we know is wrong.
-            encode(cmd, compositePipeline,
-                   textures: [linearTex, linearTex, blackTexture(), outputTex],
-                   uniforms: uniforms(settings, w: w, h: h), size: (w, h))
-            cmd.commit()
-            return outputTex
+        let u = uniforms(settings, w: w, h: h)
+        // One common composite and filter exit handles bokeh off, missing neural
+        // results, missing bokeh intermediates, and the complete bokeh path.
+        if settings.bokehEnabled, let matte, let cocTex, let blurTex,
+           let depthHistory, let depthHistoryPrev, let matteHistory, let matteRefined,
+           let depth = depth ?? (settings.uniformBlur ? blackTexture() : nil) {
+            var matteAlpha: Float = 0.6
+            guard encode(cmd, smoothPipeline, textures: [matte, matteHistory, matteHistory],
+                         buffer: &matteAlpha,
+                         size: (matteHistory.width, matteHistory.height)),
+                  encode(cmd, matteRefinePipeline,
+                         textures: [matteHistory, linearTex, matteRefined], size: (w, h)) else { return nil }
+            var depthAlpha: Float = 0.35
+            guard encode(cmd, depthSmoothPipeline,
+                         textures: [depth, matteRefined, depthHistory, depthHistoryPrev],
+                         buffer: &depthAlpha,
+                         size: (depthHistory.width, depthHistory.height)),
+                  encode(cmd, cocPipeline, textures: [depthHistoryPrev, matteRefined, cocTex],
+                         uniforms: u, size: (w, h)),
+                  encode(cmd, gatherPipeline, textures: [linearTex, cocTex, blurTex],
+                         uniforms: u, size: (w, h)) else { return nil }
+            updatedDepthHistory = true
+            compositeBlur = blurTex
+            compositeCoC = cocTex
+        }
+        guard encode(cmd, compositePipeline,
+                     textures: [linearTex, compositeBlur, compositeCoC, compositeTarget],
+                     uniforms: u, size: (w, h)) else { return nil }
+        if filtering {
+            guard effects.encode(commandBuffer: cmd, source: compositeTarget,
+                                 destination: output.texture, filter: settings.filter,
+                                 intensity: settings.filterIntensity, face: face,
+                                 time: settings.animateFilters && settings.filter.isAnimated
+                                    ? ProcessInfo.processInfo.systemUptime - effectsEpoch : 0) else { return nil }
         }
 
-        // 2. Smooth the mask — ONE rate for the whole frame.
-        //
-        //    A previous version varied the rate per pixel (hard smoothing where
-        //    the image was static, fast where it moved) to kill flicker without
-        //    causing lag. It worked on paper and looked awful: different parts of
-        //    the mask then lag by different amounts, so the edge undulates like a
-        //    membrane instead of moving as one rigid piece. "Jelly". A spatially
-        //    varying delay is more objectionable than the artifact it fixes —
-        //    people forgive a uniformly late edge, but not a wobbling one.
-        var matteAlpha: Float = 0.6
-        encode(cmd, smoothPipeline, textures: [matte, matteHistory, matteHistory],
-               buffer: &matteAlpha, size: (matteHistory.width, matteHistory.height))
+        // Core Video's texture wrappers and source buffer must outlive GPU use.
+        // The wait also prevents shared bokeh/effect scratch textures from being
+        // mutated by the next frame while this frame still uses them.
+        withExtendedLifetime((pixelBuffer, luma, chroma, output)) {
+            cmd.commit()
+            cmd.waitUntilCompleted()
+        }
+        guard cmd.status == .completed else {
+            log.error("frame render failed: \(cmd.error?.localizedDescription ?? "unknown GPU error", privacy: .public)")
+            return nil
+        }
+        if updatedDepthHistory { swap(&self.depthHistory, &self.depthHistoryPrev) }
+        return output
+    }
 
-        // 2b. Guided upsample to full resolution, using the image itself as the
-        //     edge guide. Without this the mask is just bilinearly stretched, and
-        //     its blocky low-res boundary staircases down the side of a face.
-        guard let matteRefined else { return outputTex }
-        encode(cmd, matteRefinePipeline,
-               textures: [matteHistory, linearTex, matteRefined], size: (w, h))
-
-        // 3. Update the BACKGROUND depth history, masked by the (already updated)
-        //    matte so the subject never writes their own depth into it. See
-        //    depth_smooth for why: otherwise the space you just walked out of
-        //    keeps your near-depth, stays near the focal plane, and renders as a
-        //    sharp person-shaped ghost trailing behind you.
-        guard let depthHistoryPrev else { return outputTex }
-        var depthAlpha: Float = 0.35
-        encode(cmd, depthSmoothPipeline,
-               textures: [depth, matteRefined, depthHistory, depthHistoryPrev],
-               buffer: &depthAlpha,
-               size: (depthHistory.width, depthHistory.height))
-        swap(&self.depthHistory, &self.depthHistoryPrev)
-
-        guard let liveDepth = self.depthHistory else { return outputTex }
-
-        // 4. Depth + refined matte -> per-pixel circle of confusion.
-        var u = uniforms(settings, w: w, h: h)
-        encode(cmd, cocPipeline, textures: [liveDepth, matteRefined, cocTex],
-               uniforms: u, size: (w, h))
-
-        // 4. The gather itself.
-        encode(cmd, gatherPipeline, textures: [linearTex, cocTex, blurTex],
-               uniforms: u, size: (w, h))
-
-        // 5. Blend sharp/blurred by CoC and encode back to sRGB.
-        encode(cmd, compositePipeline, textures: [linearTex, blurTex, cocTex, outputTex],
-               uniforms: u, size: (w, h))
-
-        cmd.commit()
-        _ = u  // uniforms are copied into the encoder; silence the warning
-        return outputTex
+    /// Invalidates an in-flight landmark result when capture stops/restarts.
+    func resetFaceTracking() {
+        faceTracker.reset()
     }
 
     /// Runs depth + segmentation off the render path. If a previous pass is
@@ -449,54 +464,47 @@ final class BokehRenderer: @unchecked Sendable {
         }
     }
 
-    // MARK: - Virtual camera export
+    // MARK: - Owned frame output
 
-    private var exportPool: CVPixelBufferPool?
-    private var exportSize = (w: 0, h: 0)
+    private var outputPool: CVPixelBufferPool?
+    private var outputSize = (w: 0, h: 0)
+    private let outputAllocationOptions = [
+        kCVPixelBufferPoolAllocationThresholdKey as String: 6
+    ] as CFDictionary
+    private let outputTextureAttributes = [
+        kCVMetalTextureUsage as String: MTLTextureUsage.shaderRead.union(.shaderWrite).rawValue
+    ] as CFDictionary
 
-    /// Copies a rendered BGRA frame into an IOSurface-backed pixel buffer for
-    /// the virtual camera's sink. Runs on the render worker. The GPU blit plus
-    /// wait costs well under a millisecond at 1080p — and the wait is required,
-    /// because the sink will wrap this buffer into a sample buffer immediately.
-    func exportFrame(_ texture: MTLTexture) -> CVPixelBuffer? {
-        if exportPool == nil || exportSize != (texture.width, texture.height) {
+    private func makeOutputFrame(w: Int, h: Int) -> RenderedFrame? {
+        if outputPool == nil || outputSize != (w, h) {
             let attrs: [String: Any] = [
                 kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-                kCVPixelBufferWidthKey as String: texture.width,
-                kCVPixelBufferHeightKey as String: texture.height,
+                kCVPixelBufferWidthKey as String: w,
+                kCVPixelBufferHeightKey as String: h,
                 kCVPixelBufferIOSurfacePropertiesKey as String: [:],
                 kCVPixelBufferMetalCompatibilityKey as String: true,
             ]
             var pool: CVPixelBufferPool?
-            CVPixelBufferPoolCreate(nil,
-                                    [kCVPixelBufferPoolMinimumBufferCountKey: 6] as CFDictionary,
-                                    attrs as CFDictionary, &pool)
-            exportPool = pool
-            exportSize = (texture.width, texture.height)
+            guard CVPixelBufferPoolCreate(nil, nil, attrs as CFDictionary, &pool) == kCVReturnSuccess
+            else { return nil }
+            outputPool = pool
+            outputSize = (w, h)
         }
-        guard let exportPool else { return nil }
-
-        var pb: CVPixelBuffer?
-        CVPixelBufferPoolCreatePixelBuffer(nil, exportPool, &pb)
-        guard let pb else { return nil }
-
-        var cvTex: CVMetalTexture?
-        CVMetalTextureCacheCreateTextureFromImage(nil, textureCache, pb, nil,
-                                                  .bgra8Unorm,
-                                                  texture.width, texture.height, 0, &cvTex)
-        guard let cvTex, let dst = CVMetalTextureGetTexture(cvTex),
-              let cmd = queue.makeCommandBuffer(),
-              let blit = cmd.makeBlitCommandEncoder() else { return nil }
-
-        blit.copy(from: texture, sourceSlice: 0, sourceLevel: 0,
-                  sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
-                  sourceSize: MTLSize(width: texture.width, height: texture.height, depth: 1),
-                  to: dst, destinationSlice: 0, destinationLevel: 0,
-                  destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
-        blit.endEncoding()
-        cmd.commit()
-        cmd.waitUntilCompleted()
-        return pb
+        guard let outputPool else { return nil }
+        var buffer: CVPixelBuffer?
+        guard CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(
+            nil, outputPool, outputAllocationOptions, &buffer) == kCVReturnSuccess,
+              let buffer else { return nil }
+        var backing: CVMetalTexture?
+        guard CVMetalTextureCacheCreateTextureFromImage(
+            nil, textureCache, buffer, outputTextureAttributes, .bgra8Unorm,
+            w, h, 0, &backing) == kCVReturnSuccess,
+              let backing, let texture = CVMetalTextureGetTexture(backing) else { return nil }
+        CVBufferSetAttachment(buffer, kCVImageBufferColorPrimariesKey,
+                              kCVImageBufferColorPrimaries_ITU_R_709_2, .shouldPropagate)
+        CVBufferSetAttachment(buffer, kCVImageBufferTransferFunctionKey,
+                              kCVImageBufferTransferFunction_sRGB, .shouldPropagate)
+        return RenderedFrame(texture: texture, pixelBuffer: buffer, backing: backing)
     }
 
     // MARK: - Plumbing
@@ -528,15 +536,22 @@ final class BokehRenderer: @unchecked Sendable {
         )
     }
 
+    private struct PlaneTexture {
+        let backing: CVMetalTexture
+        let texture: MTLTexture
+    }
+
     private func makeTexture(_ pb: CVPixelBuffer, plane: Int,
-                             format: MTLPixelFormat) -> MTLTexture? {
+                             format: MTLPixelFormat) -> PlaneTexture? {
         let w = CVPixelBufferGetWidthOfPlane(pb, plane)
         let h = CVPixelBufferGetHeightOfPlane(pb, plane)
+        guard w > 0, h > 0 else { return nil }
         var cvTex: CVMetalTexture?
         let status = CVMetalTextureCacheCreateTextureFromImage(
             nil, textureCache, pb, nil, format, w, h, plane, &cvTex)
-        guard status == kCVReturnSuccess, let cvTex else { return nil }
-        return CVMetalTextureGetTexture(cvTex)
+        guard status == kCVReturnSuccess, let cvTex,
+              let texture = CVMetalTextureGetTexture(cvTex) else { return nil }
+        return PlaneTexture(backing: cvTex, texture: texture)
     }
 
     private func allocate(w: Int, h: Int) {
@@ -553,7 +568,7 @@ final class BokehRenderer: @unchecked Sendable {
         linearTex = make(.rgba16Float, w, h)
         blurTex   = make(.rgba16Float, w, h)
         cocTex    = make(.r16Float, w, h)
-        outputTex = make(.bgra8Unorm, w, h)
+        effectInput = nil
 
         // Depth Anything V2 has a FIXED 518x392 output — not square, and not
         // resizable. Match it exactly or the history won't line up.
@@ -579,7 +594,11 @@ final class BokehRenderer: @unchecked Sendable {
         let d = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .r16Float, width: 1, height: 1, mipmapped: false)
         d.usage = [.shaderRead]
+        d.storageMode = .shared
         let t = device.makeTexture(descriptor: d)!
+        var zero: UInt16 = 0
+        t.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0,
+                  withBytes: &zero, bytesPerRow: MemoryLayout<UInt16>.stride)
         _black = t
         return t
     }
@@ -588,8 +607,8 @@ final class BokehRenderer: @unchecked Sendable {
                         textures: [MTLTexture], uniforms: Uniforms? = nil,
                         buffer: UnsafeMutableRawPointer? = nil,
                         bufferLength: Int = MemoryLayout<Float>.stride,
-                        size: (w: Int, h: Int)) {
-        guard let enc = cmd.makeComputeCommandEncoder() else { return }
+                        size: (w: Int, h: Int)) -> Bool {
+        guard let enc = cmd.makeComputeCommandEncoder() else { return false }
         enc.setComputePipelineState(pipeline)
         for (i, t) in textures.enumerated() { enc.setTexture(t, index: i) }
         if var u = uniforms {
@@ -602,5 +621,6 @@ final class BokehRenderer: @unchecked Sendable {
                              height: (size.h + 15) / 16, depth: 1)
         enc.dispatchThreadgroups(groups, threadsPerThreadgroup: tg)
         enc.endEncoding()
+        return true
     }
 }

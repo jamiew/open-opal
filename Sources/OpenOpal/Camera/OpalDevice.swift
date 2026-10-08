@@ -53,6 +53,9 @@ final class OpalDevice {
         set { sink.callback = newValue }
     }
 
+    /// Invalidates capture-dependent tracking for manual and watchdog restarts.
+    var onDisconnect: (() -> Void)?
+
     /// The frame path lives entirely off the main actor: depthai delivers frames
     /// on its own thread, and bouncing every one through the main actor just to
     /// copy bytes would put a 30Hz memcpy of 3MB behind whatever the UI is doing.
@@ -70,6 +73,7 @@ final class OpalDevice {
     /// A close still in flight. Connecting waits for it, so two XLink sessions
     /// never fight over one camera.
     private var closing: Task<Void, Never>?
+    private var isConnecting = false
 
     init() {
         opal_set_boot_logger(opalBootLogTrampoline,
@@ -112,7 +116,9 @@ final class OpalDevice {
     /// the XLink stream outright ("Couldn't read data from stream: __bootloader").
     /// So: wait for it, don't fail on it.
     func connect(settings: CameraSettings) async {
-        guard handle == nil else { return }
+        guard handle == nil, !isConnecting else { return }
+        isConnecting = true
+        defer { isConnecting = false }
         lastSettings = settings
 
         state = .searching
@@ -222,6 +228,7 @@ final class OpalDevice {
         telemetryTimer?.invalidate()
         telemetryTimer = nil
         state = .searching
+        onDisconnect?()
         guard let handle else { return }
         self.handle = nil
         let box = HandleBox(handle)
@@ -239,6 +246,8 @@ final class OpalDevice {
     func shutdown(timeout: TimeInterval = 2) {
         telemetryTimer?.invalidate()
         telemetryTimer = nil
+        state = .searching
+        onDisconnect?()
         guard let handle else { return }
         self.handle = nil
         let box = HandleBox(handle)

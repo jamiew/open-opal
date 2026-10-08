@@ -1,13 +1,14 @@
 import Foundation
 import Observation
 
-/// Everything the C1's ISP can be told to do, in one observable model.
+/// Camera controls and host-side rendering settings in one observable model.
 ///
-/// Split into two groups that behave very differently:
+/// Device controls split into two groups that behave very differently:
 ///  - **hot** settings stream over the XLink control queue and apply within a
 ///    frame or two.
 ///  - **cold** settings (resolution, fps) are baked into the device pipeline and
 ///    require a reboot of the Myriad — roughly 2-5 seconds of black.
+/// Host-side bokeh and filters apply immediately without changing the device pipeline.
 @Observable
 final class CameraSettings {
 
@@ -166,6 +167,13 @@ final class CameraSettings {
     var contrast: Int = 0 { didSet { save() } } // -10..10
     var saturation: Int = 0 { didSet { save() } } // -10..10
 
+
+    // MARK: - Filters (host-side; no camera restart)
+
+    var filter: CameraFilter = .none { didSet { save() } }
+    var filterIntensity: Double = 0.7 { didSet { save() } }
+    var animateFilters = true { didSet { save() } }
+
     // MARK: - Bokeh (host-side; see BokehRenderer)
 
     /// Most people want one switch and one slider. Everything else is here for
@@ -270,14 +278,16 @@ final class CameraSettings {
         if let value = saved.meterOnSubject { meterOnSubject = value }
         if let value = saved.manualFocus { manualFocus = value }
         if let value = saved.lensPosition, (0...255).contains(value) { lensPosition = value }
-        // One-shot AUTO is what click-to-focus and face tracking leave behind to
-        // hold a focus. Restoring it would start every session with autofocus
-        // frozen, so a fresh launch goes back to the default mode instead.
+        // One-shot AUTO holds the result of a tap or subject focus. Starting a
+        // fresh session in that mode would leave autofocus frozen.
         if let value = saved.afMode, value != .auto { afMode = value }
         if let value = saved.focusOnSubject { focusOnSubject = value }
         if let value = saved.limitAfRange { limitAfRange = value }
-        if let value = saved.afRangeInfinity, (0...255).contains(value) { afRangeInfinity = value }
-        if let value = saved.afRangeMacro, (0...255).contains(value) { afRangeMacro = value }
+        if let far = saved.afRangeInfinity, let near = saved.afRangeMacro,
+           (0...255).contains(far), (0...255).contains(near), far <= near {
+            afRangeInfinity = far
+            afRangeMacro = near
+        }
         if let value = saved.manualWhiteBalance { manualWhiteBalance = value }
         if let value = saved.whiteBalanceK, (1000...12000).contains(value) { whiteBalanceK = value }
         if let value = saved.awbMode { awbMode = value }
@@ -289,6 +299,9 @@ final class CameraSettings {
         if let value = saved.brightness, (-10...10).contains(value) { brightness = value }
         if let value = saved.contrast, (-10...10).contains(value) { contrast = value }
         if let value = saved.saturation, (-10...10).contains(value) { saturation = value }
+        if let value = saved.filter, let selected = CameraFilter(rawValue: value) { filter = selected }
+        if let value = saved.filterIntensity, (0...1).contains(value) { filterIntensity = value }
+        if let value = saved.animateFilters { animateFilters = value }
         if let value = saved.showAdvanced { showAdvanced = value }
         if let value = saved.bokehEnabled { bokehEnabled = value }
         if let value = saved.syncBokeh { syncBokeh = value }
@@ -332,6 +345,9 @@ final class CameraSettings {
             brightness: brightness,
             contrast: contrast,
             saturation: saturation,
+            filter: filter.rawValue,
+            filterIntensity: filterIntensity,
+            animateFilters: animateFilters,
             showAdvanced: showAdvanced,
             bokehEnabled: bokehEnabled,
             syncBokeh: syncBokeh,
@@ -379,6 +395,9 @@ final class CameraSettings {
         var brightness: Int?
         var contrast: Int?
         var saturation: Int?
+        var filter: String?
+        var filterIntensity: Double?
+        var animateFilters: Bool?
         var showAdvanced: Bool?
         var bokehEnabled: Bool?
         var syncBokeh: Bool?
@@ -400,6 +419,12 @@ final class CameraSettings {
         matteQuality = .accurate
     }
 
+    func resetFilters() {
+        filter = .none
+        filterIntensity = 0.7
+        animateFilters = true
+    }
+
     func reset() {
         autoExposure = true; evCompensation = 0; aeLock = false
         meterOnSubject = false
@@ -411,6 +436,7 @@ final class CameraSettings {
         antiBanding = .hz60
         sharpness = 1; lumaDenoise = 1; chromaDenoise = 1
         brightness = 0; contrast = 0; saturation = 0
+        resetFilters()
     }
 }
 

@@ -135,6 +135,5 @@ class BundleTests(unittest.TestCase):
         with self.assertRaises(bundler.BundleError):
             bundler.process(self.app, validate_only=True)
 
-
 if __name__ == "__main__":
     unittest.main()

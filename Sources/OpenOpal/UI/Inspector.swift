@@ -32,8 +32,7 @@ struct Inspector: View {
                 Color.clear.frame(height: 0).id(Self.top)
 
                 // ============================================================
-                // SIMPLE — what almost everyone actually wants. One switch and
-                // one slider. The camera handles the rest.
+                // SIMPLE — everyday controls that apply without a camera restart.
                 // ============================================================
                 Section("Background", icon: "camera.aperture", in: glass) {
                     Toggle("Blur background", isOn: $settings.bokehEnabled)
@@ -49,6 +48,10 @@ struct Inspector: View {
                                  tone: .hint)
                         }
                     }
+                }
+
+                Section("Filters", icon: "camera.filters", in: glass) {
+                    FilterBrowser(settings: settings)
                 }
 
                 Section("Image", icon: "person.crop.square", in: glass) {
@@ -108,7 +111,7 @@ struct Inspector: View {
                             Note("This build supports camera controls and preview. Use a signed extension build to make the camera available to video apps.",
                                  tone: .hint)
                         } else {
-                            Note("Puts the processed image — blur and all — into every video app as “Open Opal Camera”.",
+                            Note("Puts the processed image — background blur and filters included — into every video app as “Open Opal Camera”.",
                                  tone: .hint)
                             Button {
                                 camera.installer.install()
@@ -313,8 +316,12 @@ struct Inspector: View {
 
                 // --- Focus ---------------------------------------------------
                 Section("Focus", icon: "camera.metering.spot", plain: true) {
-                    Toggle("Manual", isOn: $settings.manualFocus)
-                        .onChange(of: settings.manualFocus) { camera.push() }
+                    Toggle("Manual", isOn: Binding(
+                        get: { settings.manualFocus },
+                        set: {
+                            settings.manualFocus = $0
+                            camera.push()
+                        }))
 
                     if settings.manualFocus {
                         Slider2("Position", value: Binding(
