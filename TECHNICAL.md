@@ -68,6 +68,14 @@ cmake --build build/control-tests --target control_delta_test usb_only_test
 ctest --test-dir build/control-tests --output-on-failure
 ```
 
+The production Metal renderer has a separate camera-free check on Apple silicon.
+It checks completed GPU pixels shared by preview and sink, retained output,
+bounded storage, and recovery after readers release their frames:
+
+```sh
+./scripts/check-render.sh
+```
+
 ## The hardware
 
 Little of this is documented elsewhere, so for the record:
@@ -132,6 +140,11 @@ for distance-based falloff.
 Depth analysis runs one inference at a time, including switches between
 background and frame-paired analysis. Matte quality changes take effect when
 an idle analysis lane starts its next frame, not during a running Vision request.
+
+Preview and virtual-camera consumers retain the same completed render output.
+Later frames, including a resolution change, cannot overwrite pixels still
+owned by a reader. When all output slots are retained, rendering drops a frame
+instead of recycling live storage.
 
 ### Autofocus
 

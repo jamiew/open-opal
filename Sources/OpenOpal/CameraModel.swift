@@ -22,8 +22,8 @@ final class CameraModel {
     private var feederPollStarted = false
     private var isStarting = false
 
-    /// The freshest rendered texture, handed to the preview each vsync.
-    private(set) var latestTexture: MTLTexture?
+    /// Retain the backing pixel buffer while the preview reads its texture.
+    private(set) var latestFrame: RenderedFrame?
 
     /// What the mask costs, in milliseconds. Shown in the status pill — in sync
     /// mode this is latency you actually feel, so it shouldn't be a mystery.
@@ -130,20 +130,19 @@ final class CameraModel {
                                               needsDepth: !snapshot.uniformBlur)
                 }
 
-                let texture = TexBox(t: renderer.render(pixelBuffer: frame.buffer,
-                                                        settings: snapshot))
+                guard let rendered = renderer.render(pixelBuffer: frame.buffer,
+                                                      settings: snapshot) else { return }
 
                 // Feed the virtual camera the exact frame the preview shows —
                 // processed, un-mirrored. Off-main, like everything else here.
-                if let t = texture.t, self.feeder.connected,
-                   let pb = renderer.exportFrame(t) {
-                    self.feeder.send(pb)
+                if self.feeder.connected {
+                    self.feeder.send(rendered.pixelBuffer)
                 }
 
                 await MainActor.run {
                     if seq >= self.presentedSequence {
                         self.presentedSequence = seq
-                        self.latestTexture = texture.t
+                        self.latestFrame = rendered
                     }
                 }
             }
@@ -333,8 +332,5 @@ private final class FrameGate: @unchecked Sendable {
     func exit() { lock.lock(); count -= 1; lock.unlock() }
 }
 
-/// CVPixelBuffer / MTLTexture aren't Sendable, but these specific instances are
-/// safe to move: the pixel buffer is pool-owned with no other writer, and the
-/// texture is only read after the render that produced it completes.
+/// The input buffer is pool-owned and has no other writer.
 private struct FrameBox: @unchecked Sendable { let buffer: CVPixelBuffer }
-private struct TexBox: @unchecked Sendable { let t: MTLTexture? }
