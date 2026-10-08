@@ -71,7 +71,8 @@ ctest --test-dir build/control-tests --output-on-failure
 The production Metal renderer has a separate camera-free check on Apple silicon.
 It checks completed GPU pixels shared by preview and sink, retained output,
 bounded storage, analysis retention through GPU completion, exact-frame pairing,
-stale capture/mode rejection, and recovery after readers release their frames:
+stale capture/mode rejection, temporal history and its reset behavior, and
+recovery after readers release their frames:
 
 ```sh
 ./scripts/check-render.sh
@@ -153,6 +154,12 @@ finishes. Capture resets and sync-mode changes reject earlier results and
 subject callbacks; they do not recycle a lane while Vision is still using it.
 Synchronous rendering rejects analysis for any other input buffer rather than
 silently falling back to the latest asynchronous mask.
+
+Temporal smoothing reads the previous matte without changing it. A fresh
+capture, resolution change, analysis-mode change, or interrupted bokeh path
+starts from the current matte instead of blending with old or uninitialized
+history. The check compares GPU history pixels and fresh-versus-warm rendering,
+then checks that capture, mode, and resolution resets match a fresh renderer.
 
 ### Autofocus
 
