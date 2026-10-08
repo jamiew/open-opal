@@ -70,7 +70,8 @@ ctest --test-dir build/control-tests --output-on-failure
 
 The production Metal renderer has a separate camera-free check on Apple silicon.
 It checks completed GPU pixels shared by preview and sink, retained output,
-bounded storage, and recovery after readers release their frames:
+bounded storage, analysis retention through GPU completion, exact-frame pairing,
+stale capture/mode rejection, and recovery after readers release their frames:
 
 ```sh
 ./scripts/check-render.sh
@@ -130,9 +131,10 @@ Myriad X (IMX582)
                                  SwiftUI preview
 ```
 
-The background blur uses Vision person segmentation, computed for the same
-frame it masks (several frames are analysed concurrently to hold 30 fps),
-then blurred in linear light so highlights bloom instead of greying out. An
+The background blur uses Vision person segmentation. Synchronous bokeh pairs
+analysis with the exact input frame; asynchronous mode reuses the latest current
+analysis without waiting for inference. Frames are blurred in linear light so
+highlights bloom instead of greying out. An
 optional depth-graded mode uses
 [Depth Anything V2](https://huggingface.co/apple/coreml-depth-anything-v2-small)
 for distance-based falloff.
@@ -145,6 +147,12 @@ Preview and virtual-camera consumers retain the same completed render output.
 Later frames, including a resolution change, cannot overwrite pixels still
 owned by a reader. When all output slots are retained, rendering drops a frame
 instead of recycling live storage.
+
+Matte and depth results keep their storage until every analysis or GPU reader
+finishes. Capture resets and sync-mode changes reject earlier results and
+subject callbacks; they do not recycle a lane while Vision is still using it.
+Synchronous rendering rejects analysis for any other input buffer rather than
+silently falling back to the latest asynchronous mask.
 
 ### Autofocus
 

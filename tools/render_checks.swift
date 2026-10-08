@@ -61,16 +61,18 @@ struct RenderChecks {
         let renderer = BokehRenderer()!
         let snapshot = RenderSettings(settings)
         let input = nv12(cb: 100, cr: 155)
-        let first = renderer.render(pixelBuffer: input, settings: snapshot)!
+        let first = renderer.render(pixelBuffer: input, settings: snapshot,
+                                    captureGeneration: renderer.captureGeneration)!
         let original = pixels(first.pixelBuffer)
         require(original[3] == 255 && original[2] > original[0],
                 "GPU output must preserve opaque BGRA channel order")
         require(texturePixels(first.texture) == original, "Preview and sink must share completed GPU pixels")
         autoreleasepool {
-            let second = renderer.render(pixelBuffer: nv12(luma: 200), settings: snapshot)!
+            let second = renderer.render(pixelBuffer: nv12(luma: 200), settings: snapshot,
+                                         captureGeneration: renderer.captureGeneration)!
             require(pixels(second.pixelBuffer) != original, "A new input must produce new pixels")
             let resized = renderer.render(pixelBuffer: nv12(width: 160, height: 90, luma: 235),
-                                          settings: snapshot)!
+                                          settings: snapshot, captureGeneration: renderer.captureGeneration)!
             require(pixels(resized.pixelBuffer).allSatisfy { $0 == 255 }, "White input must render opaque white")
         }
         require(pixels(first.pixelBuffer) == original && texturePixels(first.texture) == original,
@@ -79,16 +81,227 @@ struct RenderChecks {
         let bounded = BokehRenderer()!
         autoreleasepool {
             var retained: [RenderedFrame] = []
-            for _ in 0..<6 { retained.append(bounded.render(pixelBuffer: input, settings: snapshot)!) }
-            require(bounded.render(pixelBuffer: input, settings: snapshot) == nil,
+            for _ in 0..<6 {
+                retained.append(bounded.render(pixelBuffer: input, settings: snapshot,
+                                               captureGeneration: bounded.captureGeneration)!)
+            }
+            require(bounded.render(pixelBuffer: input, settings: snapshot,
+                                   captureGeneration: bounded.captureGeneration) == nil,
                     "Retained output must be bounded rather than overwritten")
             retained.removeAll()
         }
         autoreleasepool {
-            require(bounded.render(pixelBuffer: input, settings: snapshot) != nil,
+            require(bounded.render(pixelBuffer: input, settings: snapshot,
+                                   captureGeneration: bounded.captureGeneration) != nil,
                     "Released output storage must recover")
         }
         print("PASS: production GPU pixels, shared preview/sink pixels, retained output, bounded output recovery")
+    }
+
+    static func analysisMatte(_ pool: AnalysisTexturePool, value: UInt8,
+                              width: Int = 16, height: Int = 16) -> MatteResult {
+        let backing = pool.acquire(width: width, height: height)!
+        let mask = [UInt8](repeating: value, count: width * height)
+        mask.withUnsafeBytes {
+            backing.texture.replace(region: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0,
+                                    withBytes: $0.baseAddress!, bytesPerRow: width)
+        }
+        return MatteResult(backing: backing, mask: mask, width: width, height: height)
+    }
+
+    static func firstMaskByte(_ texture: MTLTexture) -> UInt8 {
+        var value: UInt8 = 0
+        texture.getBytes(&value, bytesPerRow: 1, from: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0)
+        return value
+    }
+
+    static func floatTexture(_ device: MTLDevice, values: [Float], width: Int, height: Int) -> MTLTexture {
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .r32Float, width: width, height: height, mipmapped: false)
+        descriptor.storageMode = .shared
+        descriptor.usage = [.shaderRead, .shaderWrite]
+        let texture = device.makeTexture(descriptor: descriptor)!
+        values.withUnsafeBytes {
+            texture.replace(region: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0,
+                            withBytes: $0.baseAddress!, bytesPerRow: width * MemoryLayout<Float>.size)
+        }
+        return texture
+    }
+
+    static func floats(_ texture: MTLTexture) -> [Float] {
+        var values = [Float](repeating: 0, count: texture.width * texture.height)
+        values.withUnsafeMutableBytes {
+            texture.getBytes($0.baseAddress!, bytesPerRow: texture.width * MemoryLayout<Float>.size,
+                             from: MTLRegionMake2D(0, 0, texture.width, texture.height), mipmapLevel: 0)
+        }
+        return values
+    }
+
+    static func encodeSmooth(_ command: MTLCommandBuffer, pipeline: MTLComputePipelineState,
+                             current: MTLTexture, history: MTLTexture, output: MTLTexture,
+                             alpha: Float) {
+        let encoder = command.makeComputeCommandEncoder()!
+        encoder.setComputePipelineState(pipeline)
+        encoder.setTexture(current, index: 0)
+        encoder.setTexture(history, index: 1)
+        encoder.setTexture(output, index: 2)
+        var alpha = alpha
+        encoder.setBytes(&alpha, length: MemoryLayout<Float>.size, index: 0)
+        encoder.dispatchThreads(MTLSize(width: output.width, height: output.height, depth: 1),
+                                threadsPerThreadgroup: MTLSize(width: 8, height: 8, depth: 1))
+        encoder.endEncoding()
+    }
+
+    static func checkAnalysisStorage() {
+        let device = MTLCreateSystemDefaultDevice()!
+        let pool = AnalysisTexturePool(device: device, format: .r8Unorm, capacity: 2)
+        let store = BokehRenderer.AnalysisStore()
+        let token = store.tryBeginMatte()!
+        var first: MatteResult? = analysisMatte(pool, value: 37)
+        let originalStorage = ObjectIdentifier(first!.texture)
+        _ = store.publishMatte(first!, subject: nil, generation: token)
+        store.endMatte()
+        first = nil
+        var snapshot = store.latest()
+        var second: MatteResult? = analysisMatte(pool, value: 211)
+        require(firstMaskByte(snapshot.1!.texture) == 37, "Later analysis overwrote retained matte pixels")
+        require(pool.acquire(width: 16, height: 16) == nil, "Analysis storage must stay bounded")
+        _ = store.reset()
+        require(pool.acquire(width: 16, height: 16) == nil, "Reset recycled a retained matte")
+        snapshot = (nil, nil, nil)
+        autoreleasepool {
+            let reused = pool.acquire(width: 16, height: 16)!
+            require(ObjectIdentifier(reused.texture) == originalStorage, "Released storage must be reused")
+            require(firstMaskByte(second!.texture) == 211, "Reusing another slot corrupted a result")
+        }
+        second = nil
+
+        let depthPool = AnalysisTexturePool(device: device, format: .r32Float, capacity: 1)
+        autoreleasepool {
+            let depthToken = store.tryBeginDepth()!
+            let backing = depthPool.acquire(width: 1, height: 1)!
+            var value: Float = 0.25
+            backing.texture.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0,
+                                    withBytes: &value, bytesPerRow: MemoryLayout<Float>.size)
+            store.publishDepth(DepthProvider.Result(backing: backing, values: [value], width: 1, height: 1),
+                               generation: depthToken)
+            store.endDepth()
+        }
+        var depthSnapshot = store.latest()
+        _ = store.reset()
+        require(depthPool.acquire(width: 1, height: 1) == nil, "Reset recycled a retained depth result")
+        require(floats(depthSnapshot.0!.texture) == [0.25] && depthSnapshot.0!.values == [0.25],
+                "Retained depth pixels and CPU values changed")
+        depthSnapshot = (nil, nil, nil)
+        require(depthPool.acquire(width: 1, height: 1) != nil, "Released depth storage did not recover")
+
+        let gpuPool = AnalysisTexturePool(device: device, format: .r8Unorm, capacity: 1)
+        let queue = device.makeCommandQueue()!
+        let pipeline = try! device.makeComputePipelineState(
+            function: device.makeDefaultLibrary()!.makeFunction(name: "temporal_smooth")!)
+        autoreleasepool {
+            var result: MatteResult? = analysisMatte(gpuPool, value: 37)
+            let output = floatTexture(device, values: [Float](repeating: 0, count: 256), width: 16, height: 16)
+            let event = device.makeSharedEvent()!
+            let command = queue.makeCommandBuffer()!
+            command.encodeWaitForEvent(event, value: 1)
+            encodeSmooth(command, pipeline: pipeline, current: result!.texture,
+                         history: result!.texture, output: output, alpha: 1)
+            let reader = BokehRenderer.AnalysisStore()
+            _ = reader.publishMatte(result!, subject: nil, generation: reader.tryBeginMatte()!)
+            reader.endMatte()
+            let completed = DispatchSemaphore(value: 0)
+            command.addCompletedHandler { [reader] _ in
+                _ = reader.reset()
+                completed.signal()
+            }
+            result = nil
+            command.commit()
+            require(gpuPool.acquire(width: 16, height: 16) == nil, "GPU reader lost its analysis lease")
+            event.signaledValue = 1
+            command.waitUntilCompleted()
+            completed.wait()
+            require(command.status == .completed, "GPU analysis read failed")
+            require(floats(output).allSatisfy { abs($0 - 37.0 / 255.0) < 0.00001 },
+                    "GPU read recycled analysis pixels")
+        }
+        require(gpuPool.acquire(width: 16, height: 16) != nil, "Completed GPU read did not release its lease")
+        print("PASS: bounded matte/depth leases, retained CPU/GPU results, GPU lifetime and storage recovery")
+    }
+
+    @MainActor
+    static func checkAnalysisTransitions(settings: CameraSettings) async {
+        let device = MTLCreateSystemDefaultDevice()!
+        let pool = AnalysisTexturePool(device: device, format: .r8Unorm, capacity: 1)
+        let matte = analysisMatte(pool, value: 255)
+        let store = BokehRenderer.AnalysisStore()
+        let matteToken = store.tryBeginMatte()!
+        let depthToken = store.tryBeginDepth()!
+        let subject = SubjectInfo(depth: 0.8, bounds: CGRect(x: 0, y: 0, width: 1, height: 1), coverage: 1)
+        let capture = store.currentCaptureGeneration
+        let syncToken = store.setSynchronous(true, captureGeneration: capture)!
+        require(store.publishMatte(matte, subject: subject, generation: matteToken) == nil,
+                "Mode transition admitted an old asynchronous matte")
+        let depthPool = AnalysisTexturePool(device: device, format: .r32Float, capacity: 1)
+        let depth = DepthProvider.Result(backing: depthPool.acquire(width: 1, height: 1)!,
+                                         values: [0.8], width: 1, height: 1)
+        store.publishDepth(depth, generation: depthToken)
+        require(store.latest().0 == nil && store.latest().1 == nil && store.latest().2 == nil,
+                "Mode transition repopulated stale analysis")
+        require(store.publishSynchronousSubject(subject, generation: syncToken)?.depth == 0.8,
+                "Current synchronous subject was lost")
+        _ = store.reset()
+        require(!store.isCurrent(syncToken), "Queued callback survived capture reset")
+        require(store.publishSynchronousSubject(subject, generation: syncToken) == nil,
+                "Old subject repopulated a new capture session")
+        require(store.setSynchronous(false, captureGeneration: capture) == nil,
+                "Old capture work changed the new session's mode")
+        _ = store.setSynchronous(false, captureGeneration: store.currentCaptureGeneration)
+        require(store.tryBeginMatte() == nil && store.tryBeginDepth() == nil,
+                "Reset reopened lanes while their old work was running")
+        store.endMatte()
+        store.endDepth()
+        require(store.tryBeginMatte() != nil && store.tryBeginDepth() != nil,
+                "Analysis lanes did not recover after old work finished")
+
+        let renderer = BokehRenderer()!
+        let input = nv12()
+        let generation = renderer.captureGeneration
+        settings.bokehEnabled = true
+        settings.syncBokeh = true
+        let prepared = await renderer.analyzeNow(pixelBuffer: input, needsDepth: false,
+                                                 captureGeneration: generation)!
+        let snapshot = RenderSettings(settings)
+        require(renderer.render(pixelBuffer: input, settings: snapshot,
+                                captureGeneration: generation) == nil,
+                "Synchronous render must require this frame's analysis")
+        autoreleasepool {
+            require(renderer.render(pixelBuffer: input, settings: snapshot,
+                                    captureGeneration: generation, analysisForFrame: prepared) != nil,
+                    "Exact input analysis was rejected")
+        }
+        require(renderer.render(pixelBuffer: nv12(), settings: snapshot,
+                                captureGeneration: generation, analysisForFrame: prepared) == nil,
+                "Analysis from a different buffer of the same dimensions was accepted")
+        settings.bokehEnabled = false
+        autoreleasepool {
+            _ = renderer.render(pixelBuffer: input, settings: RenderSettings(settings),
+                                captureGeneration: generation)
+        }
+        require(!renderer.isCurrentAnalysisGeneration(prepared.generation),
+                "Leaving synchronous mode did not fence old callbacks")
+        settings.bokehEnabled = true
+        require(renderer.render(pixelBuffer: input, settings: snapshot,
+                                captureGeneration: generation, analysisForFrame: prepared) == nil,
+                "Old synchronous analysis survived a mode round-trip")
+        renderer.resetCaptureState()
+        require(renderer.render(pixelBuffer: input, settings: snapshot,
+                                captureGeneration: generation, analysisForFrame: prepared) == nil,
+                "Capture reset admitted old rendering")
+        let stale = await renderer.analyzeNow(pixelBuffer: input, needsDepth: false,
+                                              captureGeneration: generation)
+        require(stale == nil, "Old capture work started inference after reset")
+        print("PASS: exact-frame pairing, async/sync fencing, stale capture rejection and callback generations")
     }
 
     @MainActor
@@ -101,5 +314,7 @@ struct RenderChecks {
         settings.meterOnSubject = false
         settings.focusOnSubject = false
         checkOwnedOutput(settings: settings)
+        checkAnalysisStorage()
+        await checkAnalysisTransitions(settings: settings)
     }
 }

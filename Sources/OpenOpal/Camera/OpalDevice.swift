@@ -48,15 +48,15 @@ final class OpalDevice {
     /// Handed a fresh NV12 frame, already wrapped in an IOSurface-backed
     /// CVPixelBuffer ready for Metal. **Called on the capture thread**, not the
     /// main actor — hop yourself if you need to.
-    var onFrame: ((CVPixelBuffer, Double) -> Void)? {
-        get { sink.callback }
-        set { sink.callback = newValue }
-    }
+    var onFrame: ((CVPixelBuffer, Double) -> Void)?
+
+    /// Invalidates callbacks and tracking for manual and watchdog restarts.
+    var onDisconnect: (() -> Void)?
 
     /// The frame path lives entirely off the main actor: depthai delivers frames
     /// on its own thread, and bouncing every one through the main actor just to
     /// copy bytes would put a 30Hz memcpy of 3MB behind whatever the UI is doing.
-    private let sink = FrameSink()
+    private var sink = FrameSink(callback: nil)
 
     /// The takeover, narrated with real numbers — firmware size, USB
     /// re-enumeration states, pipeline graph, handshake, first frame. Shown in
@@ -161,12 +161,12 @@ final class OpalDevice {
         //
         // The callback context is the FrameSink, not self: frames arrive on the
         // capture thread, and handing a main-actor object to C would be a lie.
-        let ctx = Unmanaged.passUnretained(sink).toOpaque()
+        sink = FrameSink(callback: onFrame)
         let mxid = target.mxid
 
         // The device can still slip into a reboot between discovery and open, so
         // a single attempt isn't enough — retry a few times before giving up.
-        let args = OpenArgs(cfg: cfg, ctx: ctx)
+        let args = OpenArgs(cfg: cfg, sink: sink)
 
         let tuningBlob = Self.discoverTuningBlob()
         if let tuningBlob { log.info("tuning blob: \(tuningBlob, privacy: .public)") }
@@ -225,9 +225,10 @@ final class OpalDevice {
         telemetryTimer?.invalidate()
         telemetryTimer = nil
         state = .searching
+        onDisconnect?()
         guard let handle else { return }
         self.handle = nil
-        let box = HandleBox(handle)
+        let box = HandleBox(handle, sink: sink)
         closing = Task { [weak self] in
             let closed = await Self.close(box, timeout: 5)
             if !closed {
@@ -242,12 +243,14 @@ final class OpalDevice {
     func shutdown(timeout: TimeInterval = 2) {
         telemetryTimer?.invalidate()
         telemetryTimer = nil
+        state = .searching
+        onDisconnect?()
         guard let handle else { return }
         self.handle = nil
-        let box = HandleBox(handle)
+        let box = HandleBox(handle, sink: sink)
         let done = DispatchSemaphore(value: 0)
         DispatchQueue.global(qos: .userInitiated).async {
-            opal_close(box.handle)
+            withExtendedLifetime(box) { opal_close(box.handle) }
             done.signal()
         }
         _ = done.wait(timeout: .now() + timeout)
@@ -259,7 +262,7 @@ final class OpalDevice {
         await withCheckedContinuation { continuation in
             let once = ResumeOnce(continuation)
             DispatchQueue.global(qos: .userInitiated).async {
-                opal_close(box.handle)
+                withExtendedLifetime(box) { opal_close(box.handle) }
                 once.resume(true)
             }
             DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
@@ -485,13 +488,12 @@ private final class FrameSink: @unchecked Sendable {
     private var pool: CVPixelBufferPool?
     private var poolSize = (w: 0, h: 0)
 
-    /// Read on the capture thread, written from the main actor at setup. Guarded
-    /// by the same lock as the pool.
-    var callback: ((CVPixelBuffer, Double) -> Void)? {
-        get { lock.withLock { _callback } }
-        set { lock.withLock { _callback = newValue } }
+    /// Immutable for this pipeline, even if an old close outlives the next boot.
+    let callback: ((CVPixelBuffer, Double) -> Void)?
+
+    init(callback: ((CVPixelBuffer, Double) -> Void)?) {
+        self.callback = callback
     }
-    private var _callback: ((CVPixelBuffer, Double) -> Void)?
 
     /// When the last frame arrived, host clock. The watchdog compares this
     /// against now: the capture thread dies SILENTLY when a USB read errors
@@ -590,16 +592,18 @@ private final class ResumeOnce: @unchecked Sendable {
 
 private struct HandleBox: @unchecked Sendable {
     let handle: OpaquePointer?
-    init(_ h: OpaquePointer?) { handle = h }
+    let sink: FrameSink?
+    init(_ h: OpaquePointer?, sink: FrameSink? = nil) {
+        handle = h
+        self.sink = sink
+    }
 }
 
-/// Everything opal_open needs, in one sendable parcel. The config is a C struct
-/// of scalars and the context is the FrameSink (which outlives the device), so
-/// both are genuinely safe to hand to another thread — Swift just can't prove it
-/// for imported C types.
+/// The C config and retained frame callback context are safe to pass off-main.
 private struct OpenArgs: @unchecked Sendable {
     let cfg: OpalPipelineConfig
-    let ctx: UnsafeMutableRawPointer
+    let sink: FrameSink
+    var ctx: UnsafeMutableRawPointer { Unmanaged.passUnretained(sink).toOpaque() }
 }
 
 /// C callback -> Swift, on depthai's capture thread. `ctx` is the unretained

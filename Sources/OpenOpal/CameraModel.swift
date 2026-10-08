@@ -22,6 +22,12 @@ final class CameraModel {
     private var feederPollStarted = false
     private var isStarting = false
 
+    init() {
+        device.onDisconnect = { [weak self] in
+            self?.resetCaptureTracking()
+        }
+    }
+
     /// Retain the backing pixel buffer while the preview reads its texture.
     private(set) var latestFrame: RenderedFrame?
 
@@ -55,22 +61,40 @@ final class CameraModel {
         }
     }
 
-    /// Caps concurrent frames at the mask provider's lane count — more would
-    /// just block on a lane anyway. Lock-based because the frame callback runs
-    /// on the capture thread, not the main actor.
-    private let gate = FrameGate(max: 3)
+    /// Drop rather than queue while analysis, render, and publication are in flight.
+    private let gate = FrameGate(max: 1)
 
-    /// Frames finish out of order when several are in flight, so we track arrival
-    /// order and refuse to present a frame older than one already on screen.
+    /// Sequence numbers keep publication monotonic across asynchronous handoffs.
     private var nextSequence = 0
     private var presentedSequence = -1
 
-    /// Last AE region we sent, so we only re-meter when the subject genuinely
-    /// moves. Re-sending on every analysis pass would flood the control queue and
-    /// make auto-exposure visibly pump.
+    /// Last AE region sent to the current pipeline.
     private var lastMeteredRect: CGRect?
     private var lastFocusArea: CGFloat?
     private var focusCooldownUntil: Date?
+    private var captureGeneration: UInt64 = 0
+
+    private func resetCaptureTracking() {
+        captureGeneration = gate.invalidate()
+        resetFocusTracking()
+        renderer?.resetCaptureState()
+        configureSubjectTracking()
+        configureFrameDelivery()
+    }
+
+    private func configureSubjectTracking() {
+        guard let renderer else { return }
+        let generation = captureGeneration
+        renderer.onSubject = { [weak self, weak renderer] subject, analysisGeneration in
+            Task { @MainActor [weak self, weak renderer] in
+                guard let self, let renderer,
+                      self.captureGeneration == generation,
+                      renderer.isCurrentAnalysisGeneration(analysisGeneration) else { return }
+                self.meter(on: subject)
+                self.focusOnSubject(subject)
+            }
+        }
+    }
 
     func start() async {
         // A launch request can reopen the window while a previous window task
@@ -85,68 +109,11 @@ final class CameraModel {
                 // uniform-blur mode, never runs at all.
                 r.matteProvider = MatteProvider(device: mtl)
             }
-            r.onSubject = { [weak self] subject in
-                Task { @MainActor in
-                    self?.meter(on: subject)
-                    self?.focusOnSubject(subject)
-                }
-            }
             renderer = r
+            configureSubjectTracking()
         }
 
-        device.onFrame = { [weak self] pixelBuffer, _ in
-            // Called on the capture thread — and the work STAYS off the main
-            // actor. This whole pipeline (analysis + five Metal pass encodes)
-            // used to hop onto the main actor for every frame, 30 times a
-            // second, which meant every SwiftUI animation had to fight the
-            // camera for main-thread time — panel springs ran like a slideshow
-            // while the video played smoothly. The main actor now does exactly
-            // two tiny things per frame: hand out a settings snapshot, and
-            // receive the finished texture.
-            //
-            // Concurrency is bounded (frames beyond the cap are DROPPED, not
-            // queued — a queue turns latency into lag), and in-flight frames can
-            // finish out of order, so each is stamped on arrival and an older
-            // frame never replaces a newer one on screen.
-            guard let self, self.gate.tryEnter() else { return }
-            let frame = FrameBox(buffer: pixelBuffer)
-
-            Task.detached(priority: .userInitiated) {
-                defer { self.gate.exit() }
-
-                guard let work = await MainActor.run(body: { () -> (BokehRenderer, RenderSettings, Int)? in
-                    guard let renderer = self.renderer else { return nil }
-                    self.syncRenderer()
-                    let seq = self.nextSequence
-                    self.nextSequence += 1
-                    return (renderer, RenderSettings(self.settings), seq)
-                }) else { return }
-                let (renderer, snapshot, seq) = work
-
-                if snapshot.bokehEnabled && snapshot.syncBokeh {
-                    // Analyse THIS frame and wait. Costs latency, buys a mask
-                    // that lines up with the pixels we're about to blur.
-                    await renderer.analyzeNow(pixelBuffer: frame.buffer,
-                                              needsDepth: !snapshot.uniformBlur)
-                }
-
-                guard let rendered = renderer.render(pixelBuffer: frame.buffer,
-                                                      settings: snapshot) else { return }
-
-                // Feed the virtual camera the exact frame the preview shows —
-                // processed, un-mirrored. Off-main, like everything else here.
-                if self.feeder.connected {
-                    self.feeder.send(rendered.pixelBuffer)
-                }
-
-                await MainActor.run {
-                    if seq >= self.presentedSequence {
-                        self.presentedSequence = seq
-                        self.latestFrame = rendered
-                    }
-                }
-            }
-        }
+        configureFrameDelivery()
 
         if !feederPollStarted {
             feederPollStarted = true
@@ -161,11 +128,60 @@ final class CameraModel {
         await device.connect(settings: settings)
     }
 
+    private func configureFrameDelivery() {
+        let generation = captureGeneration
+        let rendererGeneration = renderer?.captureGeneration
+        device.onFrame = { [weak self] pixelBuffer, _ in
+            // Each device pipeline retains this immutable generation.
+            guard let self, let rendererGeneration,
+                  self.gate.tryEnter(generation: generation) else { return }
+            let input = FrameBox(buffer: pixelBuffer)
+
+            Task.detached(priority: .userInitiated) {
+                defer { self.gate.exit() }
+                guard let work = await MainActor.run(body: { () -> (BokehRenderer, RenderSettings, Int)? in
+                    guard self.captureGeneration == generation, self.device.state.isLive,
+                          let renderer = self.renderer else { return nil }
+                    self.syncRenderer()
+                    let seq = self.nextSequence
+                    self.nextSequence += 1
+                    return (renderer, RenderSettings(self.settings), seq)
+                }) else { return }
+                let (renderer, snapshot, seq) = work
+                var analysisForFrame: BokehRenderer.FrameAnalysis?
+
+                if snapshot.bokehEnabled && snapshot.syncBokeh {
+                    guard self.gate.isCurrent(generation) else { return }
+                    analysisForFrame = await renderer.analyzeNow(pixelBuffer: input.buffer,
+                                                                needsDepth: !snapshot.uniformBlur,
+                                                                captureGeneration: rendererGeneration)
+                }
+
+                guard self.gate.isCurrent(generation),
+                      let frame = renderer.render(pixelBuffer: input.buffer,
+                                                  settings: snapshot,
+                                                  captureGeneration: rendererGeneration,
+                                                  analysisForFrame: analysisForFrame) else { return }
+                guard self.gate.isCurrent(generation) else { return }
+                if self.feeder.connected {
+                    self.feeder.send(frame.pixelBuffer)
+                }
+
+                await MainActor.run {
+                    guard self.captureGeneration == generation, self.device.state.isLive else { return }
+                    if seq >= self.presentedSequence {
+                        self.presentedSequence = seq
+                        self.latestFrame = frame
+                    }
+                }
+            }
+        }
+    }
+
     func stop() { device.shutdown() }
 
     func reconnect() async {
         guard !isStarting, !isRebooting else { return }
-        resetFocusTracking()
         isRebooting = true
         defer { isRebooting = false }
         device.disconnect()
@@ -319,15 +335,25 @@ final class CameraModel {
 private final class FrameGate: @unchecked Sendable {
     private let lock = NSLock()
     private var count = 0
+    private var generation: UInt64 = 0
     private let max: Int
 
     init(max: Int) { self.max = max }
 
-    func tryEnter() -> Bool {
+    func tryEnter(generation token: UInt64) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        guard count < max else { return false }
+        guard token == generation, count < max else { return false }
         count += 1
         return true
+    }
+    func invalidate() -> UInt64 {
+        lock.lock(); defer { lock.unlock() }
+        generation += 1
+        return generation
+    }
+    func isCurrent(_ token: UInt64) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return token == generation
     }
     func exit() { lock.lock(); count -= 1; lock.unlock() }
 }
