@@ -14,6 +14,20 @@ MODELS="$ROOT/Models"
 REPO="apple/coreml-depth-anything-v2-small"
 PKG="DepthAnythingV2SmallF16.mlpackage"
 BASE="https://huggingface.co/$REPO/resolve/main"
+download_tmp=""
+
+cleanup() {
+  status=$?
+  trap - EXIT
+  trap '' INT TERM
+  if [ -n "$download_tmp" ]; then
+    rm -f "$download_tmp"
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # An .mlpackage is a directory, not a single file, so there is no one URL to
 # grab -- fetch each member and rebuild the layout. This is the complete set;
@@ -38,7 +52,14 @@ for f in "${FILES[@]}"; do
   # -L: HF redirects the actual bytes to a CDN host.
   # --fail: without it curl writes a 404 HTML body to the file and exits 0,
   #         which would produce a corrupt package that only fails at compile.
-  curl --fail --location --progress-bar -o "$dest" "$BASE/$PKG/$f"
+  download_tmp="$(mktemp "$dest.download.XXXXXX")"
+  curl --fail --location --progress-bar -o "$download_tmp" "$BASE/$PKG/$f"
+  if [ ! -s "$download_tmp" ]; then
+    echo "empty model member: $f" >&2
+    exit 1
+  fi
+  mv "$download_tmp" "$dest"
+  download_tmp=""
 done
 
 # Core ML can load an .mlpackage directly, but it compiles it on first use --
