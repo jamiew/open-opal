@@ -108,6 +108,8 @@ report the selected camera's MxID. If that ID disappears or changes, Open Opal
 fails safely without uploading the pipeline, even if only one unbooted device
 is attached. A USB address change is allowed; an unidentified device is not.
 
+Boots acknowledge captured settings only after success. Failed boots keep changes pending.
+
 ```
 Myriad X (IMX582)
   ColorCamera ── ISP downscale ── NV12 ──► XLink/USB ──► OpalBridge (C shim over depthai-core)
