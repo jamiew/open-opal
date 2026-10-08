@@ -153,16 +153,17 @@ final class CameraDeviceSource: NSObject, CMIOExtensionDeviceSource {
     // MARK: Frame flow
 
     /// Called by the sink when the app delivers a frame: forward it verbatim.
-    func forwardToSource(_ sbuf: CMSampleBuffer) {
+    @discardableResult
+    func forwardToSource(_ sbuf: CMSampleBuffer) -> UInt64? {
+        guard let hostTime = SinkTiming.hostTimeInNanoseconds(sbuf.presentationTimeStamp) else { return nil }
         stateLock.lock()
         lastSinkFrameAt = CFAbsoluteTimeGetCurrent()
         let streaming = streamingCounter > 0
         stateLock.unlock()
-        guard streaming else { return }
+        guard streaming else { return hostTime }
 
-        sourceStream.send(sbuf,
-                          discontinuity: [],
-                          hostTimeInNanoseconds: UInt64(sbuf.presentationTimeStamp.seconds * 1e9))
+        sourceStream.send(sbuf, discontinuity: [], hostTimeInNanoseconds: hostTime)
+        return hostTime
     }
 
     func startedStreaming() {
@@ -221,10 +222,8 @@ final class CameraDeviceSource: NSObject, CMIOExtensionDeviceSource {
                 formatDescription: self.videoDescription,
                 sampleTiming: &timing,
                 sampleBufferOut: &sbuf)
-            if let sbuf {
-                self.sourceStream.send(
-                    sbuf, discontinuity: [],
-                    hostTimeInNanoseconds: UInt64(timing.presentationTimeStamp.seconds * 1e9))
+            if let sbuf, let hostTime = SinkTiming.hostTimeInNanoseconds(timing.presentationTimeStamp) {
+                self.sourceStream.send(sbuf, discontinuity: [], hostTimeInNanoseconds: hostTime)
             }
         }
         timer.resume()
@@ -345,11 +344,9 @@ extension CameraDeviceSource {
                                 completion: @escaping (Bool) -> Void) {
         guard let stream = sinkStreamValue else { completion(false); return }
         stream.consumeSampleBuffer(from: client) { [weak self] sbuf, seq, _, hasMore, err in
-            if let sbuf, err == nil {
-                self?.forwardToSource(sbuf)
+            if let sbuf, err == nil, let hostTime = self?.forwardToSource(sbuf) {
                 stream.notifyScheduledOutputChanged(CMIOExtensionScheduledOutput(
-                    sequenceNumber: seq,
-                    hostTimeInNanoseconds: UInt64(sbuf.presentationTimeStamp.seconds * 1e9)))
+                    sequenceNumber: seq, hostTimeInNanoseconds: hostTime))
             }
             completion(err == nil)
         }
