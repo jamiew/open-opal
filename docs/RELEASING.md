@@ -36,6 +36,13 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
+## Model downloads
+
+`fetch-models.sh` downloads each package member to its own sibling temporary
+file. Only a successful, nonempty download replaces the cached member, so a
+failed or interrupted download is fetched again on the next run. Exit, interrupt,
+and termination traps remove only the temporary file owned by that run.
+
 ## One-time: repository secrets
 
 The CI can't sign or notarize without these. Add them under
