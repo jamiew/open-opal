@@ -119,8 +119,10 @@ struct MetalPreview: NSViewRepresentable {
             enc.endEncoding()
 
             cmd.present(drawable)
-            // Keep the pool slot owned until this separate preview queue finishes.
-            cmd.addCompletedHandler { [frame] _ in withExtendedLifetime(frame) {} }
+            // Keep the pool slot owned until the preview queue finishes.
+            cmd.addCompletedHandler { [frame] _ in
+                withExtendedLifetime(frame) {}
+            }
             cmd.commit()
         }
 
