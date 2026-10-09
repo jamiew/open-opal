@@ -14,6 +14,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   # A new push to the same branch supersedes an in-flight run. These builds are
   # slow and there is no value in finishing a stale one.
@@ -72,6 +75,9 @@ jobs:
             -DOPAL_BRIDGE_TEST=ON \
             -Ddepthai_DIR="$PWD/vendor/install/lib/cmake/depthai"
           cmake --build build/bridgetest
+
+      - name: Run camera-free bridge regressions
+        run: ctest --test-dir build/bridgetest --output-on-failure
 
       - name: Generate the Xcode project
         run: xcodegen generate

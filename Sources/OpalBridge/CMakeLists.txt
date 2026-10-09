@@ -1,4 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
+# Must precede project(). Keep in step with project.yml.
+set(CMAKE_OSX_DEPLOYMENT_TARGET 14.0 CACHE STRING "Minimum macOS")
 project(OpalBridge LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -56,9 +58,28 @@ if(OPAL_BRIDGE_TEST)
     enable_testing()
     add_executable(control_delta_test test/control_delta_test.cpp)
     target_include_directories(control_delta_test PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
+    # The test compiles OpalBridge.cpp directly, so it needs the same libusb.
+    target_include_directories(control_delta_test PRIVATE
+        "${CMAKE_CURRENT_LIST_DIR}/../../vendor/install/lib/cmake/depthai/dependencies/include")
     target_link_libraries(control_delta_test PRIVATE depthai::core "${OPAL_LIBUSB}")
     set_target_properties(control_delta_test PROPERTIES
         INSTALL_RPATH "${CMAKE_CURRENT_LIST_DIR}/../../vendor/install/lib"
         BUILD_WITH_INSTALL_RPATH TRUE)
     add_test(NAME control_delta COMMAND control_delta_test)
+
+    # Real SDK discovery with an empty USB list and observed network attempts.
+    add_library(usb_only_observer SHARED test/usb_only_observer.cpp)
+    target_include_directories(usb_only_observer PRIVATE
+        "${CMAKE_CURRENT_LIST_DIR}/../../vendor/install/lib/cmake/depthai/dependencies/include")
+    target_link_libraries(usb_only_observer PRIVATE "${OPAL_LIBUSB}")
+    add_executable(usb_only_test test/usb_only_test.cpp)
+    target_include_directories(usb_only_test PRIVATE
+        "${CMAKE_CURRENT_LIST_DIR}/../../vendor/install/lib/cmake/depthai/dependencies/include")
+    target_link_libraries(usb_only_test PRIVATE depthai::core usb_only_observer)
+    set_target_properties(usb_only_test PROPERTIES
+        INSTALL_RPATH "${CMAKE_CURRENT_LIST_DIR}/../../vendor/install/lib"
+        BUILD_WITH_INSTALL_RPATH TRUE)
+    add_test(NAME usb_only COMMAND usb_only_test)
+    set_tests_properties(usb_only PROPERTIES
+        ENVIRONMENT "DYLD_INSERT_LIBRARIES=$<TARGET_FILE:usb_only_observer>")
 endif()

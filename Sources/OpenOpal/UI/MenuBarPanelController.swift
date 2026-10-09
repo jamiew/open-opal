@@ -14,6 +14,8 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
     private var dragMonitor: Any?
     private var isDragging = false
     private var floatingSize = NSSize(width: 440, height: 780)
+    /// Called whenever the controls are brought on screen.
+    var onShow: (() -> Void)?
 
     func install(content: NSViewController) {
         let panel = ControlsPanel(
@@ -36,11 +38,13 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
             button.image = NSImage(systemSymbolName: "camera.aperture", accessibilityDescription: "Open Opal")
             button.target = self
             button.action = #selector(toggle)
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
             button.toolTip = "Open Opal controls"
         }
         clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, !self.isDragging else { return }
+                // A floating window stays put, like any other window.
+                guard let self, !self.isDragging, !self.isFloating else { return }
                 // WindowServer can consume resize-edge clicks before AppKit.
                 guard !self.panel.frame.insetBy(dx: -4, dy: -4).contains(NSEvent.mouseLocation) else { return }
                 self.panel.orderOut(nil)
@@ -57,12 +61,26 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
     }
 
     @objc private func toggle() {
+        // An accessory app has no Dock icon to quit from, so right-click is
+        // the way out that does not depend on the panel.
+        if NSApp.currentEvent?.type == .rightMouseUp {
+            showMenu()
+            return
+        }
         if panel.isVisible && !isFloating {
             panel.orderOut(nil)
         } else {
             if !isFloating { positionAtStatusItem() }
             panel.makeKeyAndOrderFront(nil)
+            onShow?()
         }
+    }
+
+    private func showMenu() {
+        guard let button = statusItem.button else { return }
+        let menu = NSMenu()
+        menu.addItem(withTitle: "Quit Open Opal", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height + 4), in: button)
     }
 
     func detach() {
@@ -86,6 +104,7 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
         panel.styleMask.remove(.resizable)
         positionAtStatusItem()
         panel.makeKeyAndOrderFront(nil)
+        onShow?()
     }
 
     func hide() { panel.orderOut(nil) }
@@ -146,7 +165,7 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
     }
 
     func windowDidResignKey(_ notification: Notification) {
-        if !isDragging { panel.orderOut(nil) }
+        if !isDragging && !isFloating { panel.orderOut(nil) }
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {

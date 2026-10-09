@@ -1,12 +1,13 @@
 import Foundation
 
-/// Camera-free regression checks. Compile with CameraSettings.
+/// Hardware-free regression test. Compile alongside CameraSettings.swift.
 @main
 struct CameraSettingsPersistenceTests {
     static func main() throws {
         let preferences = MemoryPreferences()
         let initial = CameraSettings(preferences: preferences)
-        let defaults = CameraSettings(preferences: MemoryPreferences())
+        precondition(initial.lensPosition == 120 && initial.brightness == 0)
+        precondition(!initial.meterOnSubject && !initial.bokehEnabled)
 
         initial.manualFocus = true
         initial.lensPosition = 187
@@ -21,7 +22,7 @@ struct CameraSettingsPersistenceTests {
         initial.fps = 40
         initial.mirrorPreview = false
         initial.showAdvanced = true
-        initial.meterOnSubject = false
+        initial.meterOnSubject = true
         precondition(initial.coldDirty)
 
         let restored = CameraSettings(preferences: preferences)
@@ -29,16 +30,16 @@ struct CameraSettingsPersistenceTests {
         precondition(restored.brightness == -3)
         precondition(!restored.autoExposure && restored.exposureUs == 12_000 && restored.iso == 800)
         precondition(restored.manualWhiteBalance && restored.whiteBalanceK == 4200)
-        precondition(restored.antiBanding == .hz50 && !restored.meterOnSubject)
+        precondition(restored.antiBanding == .hz50 && restored.meterOnSubject)
         precondition(restored.outputMode == .hd720 && restored.fps == 40)
         precondition(!restored.mirrorPreview && restored.showAdvanced && !restored.coldDirty)
 
         restored.reset()
-        precondition(restored.meterOnSubject == defaults.meterOnSubject && restored.antiBanding == .hz60)
+        precondition(!restored.meterOnSubject && restored.antiBanding == .hz60)
         let reset = CameraSettings(preferences: preferences)
         precondition(!reset.manualFocus && reset.lensPosition == 120 && reset.brightness == 0)
         precondition(reset.autoExposure && reset.exposureUs == 8000)
-        precondition(reset.meterOnSubject == defaults.meterOnSubject && reset.antiBanding == .hz60)
+        precondition(!reset.meterOnSubject && reset.antiBanding == .hz60)
 
         // Blur-only changes must save immediately, without another camera
         // control change accidentally triggering the write for them.
@@ -99,13 +100,13 @@ struct CameraSettingsPersistenceTests {
         precondition(resetEffects.focusOnSubject == defaults.focusOnSubject && !resetEffects.limitAfRange)
         precondition(resetEffects.afRangeInfinity == defaults.afRangeInfinity)
         precondition(resetEffects.afRangeMacro == defaults.afRangeMacro)
-
         func restore(_ json: String) -> CameraSettings {
             preferences.set(Data(json.utf8), forKey: CameraSettings.persistenceKey)
             return CameraSettings(preferences: preferences)
         }
         let partial = restore(#"{"version":1,"brightness":4}"#)
         precondition(partial.brightness == 4 && partial.lensPosition == 120)
+        precondition(!partial.meterOnSubject)
         precondition(!partial.bokehEnabled && partial.aperture == 2.8)
         precondition(partial.syncBokeh && partial.uniformBlur && partial.matteQuality == .accurate)
         precondition(partial.focusDistance == 0.35 && partial.autoFocusSubject)
