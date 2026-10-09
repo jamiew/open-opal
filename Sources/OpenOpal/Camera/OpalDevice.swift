@@ -53,9 +53,6 @@ final class OpalDevice {
     /// Invalidates callbacks and tracking for manual and watchdog restarts.
     var onDisconnect: (() -> Void)?
 
-    /// Invalidates capture-dependent tracking for manual and watchdog restarts.
-    var onDisconnect: (() -> Void)?
-
     /// The frame path lives entirely off the main actor: depthai delivers frames
     /// on its own thread, and bouncing every one through the main actor just to
     /// copy bytes would put a 30Hz memcpy of 3MB behind whatever the UI is doing.

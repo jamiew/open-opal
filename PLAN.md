@@ -322,41 +322,22 @@ was performed. Concurrent video/model performance remains unmeasured.
 
 ## Integrated dev build
 
-The dev build combines current main, the native filters, and Generate & Edit.
-Main includes the merged dependency, saved-control, playback-stream, and
-automatic-startup fixes. The original dirty filter checkout stays unchanged.
+`develop` contains all six reviewed groups, including the experimental filters.
+Main and the installed app remain unchanged; this side build requires macOS 26.
 
-Camera-free verification passed:
+- Passed: 30 download, publication, release, and packaging checks; seven settings,
+  lifecycle, signing, and docking checks; real GPU rendering, combined blur/filter
+  output, recipes, and offline SDK control and USB-only discovery checks.
+- The Release app, extension, and helper built successfully. Six bundled Mach-O
+  binaries passed dependency validation, and local ad-hoc signatures verified.
+- Live face tracking, physical reconnect, and receiving-app output remain manual
+  checks. The dev signature cannot install or feed the signed camera extension.
 
-- Synthetic Metal effects, frame ownership, bounded pools, and virtual-output
-  conversion; strict recipes and local preset persistence.
-- Camera, blur, filter, and focus-limit persistence, reset, invalid-data handling,
-  and startup-policy transitions.
-- Two boot-safety checks, seven dependency-packaging checks, and serialized
-  autofocus controls against the freshly rebuilt DepthAI library.
-- Light-mode production browser/editor rendering, synthetic preview, and
-  draft/Apply/Revert/Undo/Save/reload transitions with isolated preferences.
-- Unsigned Release builds of the app, extension, and login helper. Packaging
-  validated seven Mach-O binaries with no dependency outside the app or macOS.
+Quit any running OpenOpal first, then launch this build from the worktree:
 
-The real local model first rejected a supported combined look, returned an
-invalid title, and changed looks during a refinement. Generation now uses catalog
-titles, an explicit current-look choice, and a capability decision before its
-explanation. The final three-case smoke selected Bearded Cowboy, reduced its
-intensity from 0.8 to 0.4 without changing looks, and rejected unsupported
-photorealism and a custom hat color. This is not a general semantic guarantee.
-
-Repeated packaging after an incremental rebuild exposed an old rewritten
-library collision. Releases now use `clean build`; the fresh build packaged
-successfully without weakening collision checks.
-
-The local app has ad-hoc signatures, not a Developer ID signature. The packaged
-Homebrew library needed its signature restored after load-path rewriting.
-Offline controls then ran against the final bundled libraries successfully.
-No account keys, camera, USB, or installed extension were used. Installing the
-bundled extension or login helper still needs the release signing workflow.
-Live tracking, concurrent model/video performance, and receiving-app output
-remain for the user's test.
+```sh
+open build/develop-live/Build/Products/Release/OpenOpal.app
+```
 
 ## Upstream refresh
 

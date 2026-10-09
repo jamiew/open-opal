@@ -23,6 +23,16 @@ editing manually. Main remains unchanged. Signed virtual-camera output still
 needs a live check.
 
 ## Install
+To test the combined local build, quit any running OpenOpal first. From this
+worktree, launch the side build rather than the installed app:
+
+```sh
+open build/develop-live/Build/Products/Release/OpenOpal.app
+```
+
+This build has a local ad-hoc signature. It does not replace `/Applications/OpenOpal.app`
+and cannot install or feed the signed virtual-camera extension.
+
 
 ## Features
 

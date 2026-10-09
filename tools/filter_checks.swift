@@ -126,13 +126,16 @@ struct FilterChecks {
         settings.filter = .hologram
         settings.animateFilters = false
         autoreleasepool {
-            guard let first = renderer.render(pixelBuffer: input, settings: RenderSettings(settings)) else {
+            guard let first = renderer.render(pixelBuffer: input, settings: RenderSettings(settings),
+                                               captureGeneration: renderer.captureGeneration) else {
                 fatalError("Stopped-motion frame failed")
             }
             Thread.sleep(forTimeInterval: 0.05)
-            guard let second = renderer.render(pixelBuffer: input, settings: RenderSettings(settings)),
+            guard let second = renderer.render(pixelBuffer: input, settings: RenderSettings(settings),
+                                                captureGeneration: renderer.captureGeneration),
                   let changedVideo = renderer.render(
-                    pixelBuffer: nv12(luma: 70), settings: RenderSettings(settings)) else {
+                    pixelBuffer: nv12(luma: 70), settings: RenderSettings(settings),
+                    captureGeneration: renderer.captureGeneration) else {
                 fatalError("Stopped-motion follow-up frame failed")
             }
             require(pixels(first.pixelBuffer) == pixels(second.pixelBuffer),
@@ -164,7 +167,8 @@ struct FilterChecks {
         settings.meterOnSubject = false
         settings.focusOnSubject = false
         let input = nv12()
-        guard let original = renderer.render(pixelBuffer: input, settings: RenderSettings(settings)) else {
+        guard let original = renderer.render(pixelBuffer: input, settings: RenderSettings(settings),
+                                              captureGeneration: renderer.captureGeneration) else {
             fatalError("Original frame failed")
         }
         let originalPixel = pixel(original.pixelBuffer)
@@ -174,7 +178,8 @@ struct FilterChecks {
 
         settings.filter = .monochrome
         settings.filterIntensity = 1
-        guard let mono = renderer.render(pixelBuffer: input, settings: RenderSettings(settings)) else {
+        guard let mono = renderer.render(pixelBuffer: input, settings: RenderSettings(settings),
+                                          captureGeneration: renderer.captureGeneration) else {
             fatalError("Monochrome frame failed")
         }
         let gray = pixel(mono.pixelBuffer)
@@ -183,7 +188,8 @@ struct FilterChecks {
         require(pixels(original.pixelBuffer) == originalPixels, "Later renders overwrote retained original frame")
 
         settings.filter = .warm
-        guard let warm = renderer.render(pixelBuffer: input, settings: RenderSettings(settings)) else {
+        guard let warm = renderer.render(pixelBuffer: input, settings: RenderSettings(settings),
+                                          captureGeneration: renderer.captureGeneration) else {
             fatalError("Warm frame failed")
         }
         let golden = pixel(warm.pixelBuffer)
@@ -194,7 +200,8 @@ struct FilterChecks {
             settings.filter = filter
             settings.filterIntensity = 0
             autoreleasepool {
-                guard let frame = renderer.render(pixelBuffer: input, settings: RenderSettings(settings)) else {
+                guard let frame = renderer.render(pixelBuffer: input, settings: RenderSettings(settings),
+                                                   captureGeneration: renderer.captureGeneration) else {
                     fatalError("Zero-strength frame failed for \(filter)")
                 }
                 require(pixels(frame.pixelBuffer) == originalPixels, "Zero strength must bypass \(filter)")
@@ -205,7 +212,8 @@ struct FilterChecks {
         for filter in CameraFilter.allCases where filter.requiresFace {
             settings.filter = filter
             autoreleasepool {
-                guard let frame = renderer.render(pixelBuffer: input, settings: RenderSettings(settings)) else {
+                guard let frame = renderer.render(pixelBuffer: input, settings: RenderSettings(settings),
+                                                   captureGeneration: renderer.captureGeneration) else {
                     fatalError("No-face frame failed")
                 }
                 require(pixels(frame.pixelBuffer) == originalPixels, "No face must not paint an attachment")
@@ -235,18 +243,21 @@ struct FilterChecks {
         settings.filter = .none
         var held: [RenderedFrame] = []
         for value in 40..<50 {
-            if let frame = bounded.render(pixelBuffer: nv12(luma: UInt8(value)), settings: RenderSettings(settings)) {
+            if let frame = bounded.render(pixelBuffer: nv12(luma: UInt8(value)), settings: RenderSettings(settings),
+                                           captureGeneration: bounded.captureGeneration) {
                 held.append(frame)
             } else { break }
         }
         require(!held.isEmpty && held.count <= 6, "Slow consumers must bound output allocation")
         let retainedPixel = pixel(held[0].pixelBuffer)
-        require(bounded.render(pixelBuffer: input, settings: RenderSettings(settings)) == nil,
+        require(bounded.render(pixelBuffer: input, settings: RenderSettings(settings),
+                               captureGeneration: bounded.captureGeneration) == nil,
                 "Exhausted pool must drop instead of overwrite")
         require(pixel(held[0].pixelBuffer) == retainedPixel, "Pool exhaustion corrupted a retained frame")
         held.removeAll()
         autoreleasepool {
-            require(bounded.render(pixelBuffer: input, settings: RenderSettings(settings)) != nil,
+            require(bounded.render(pixelBuffer: input, settings: RenderSettings(settings),
+                                   captureGeneration: bounded.captureGeneration) != nil,
                     "Pool must recover after consumers release frames")
         }
         print("PASS: native renderer colors, bypass, no-face, retained-frame ownership, pool bounds, virtual output conversion")

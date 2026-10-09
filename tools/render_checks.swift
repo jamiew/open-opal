@@ -421,6 +421,40 @@ struct RenderChecks {
     }
 
     @MainActor
+    static func checkCombinedFilters(settings: CameraSettings) async {
+        let input = checkerInput()
+        let renderer = BokehRenderer()!
+        let pool = AnalysisTexturePool(device: MTLCreateSystemDefaultDevice()!, format: .r8Unorm, capacity: 1)
+        let background = analysisMatte(pool, value: 0)
+        settings.filter = .none
+        settings.filterIntensity = 1
+        settings.bokehEnabled = false
+        let sharp = autoreleasepool {
+            pixels(renderer.render(pixelBuffer: input, settings: RenderSettings(settings),
+                                   captureGeneration: renderer.captureGeneration)!.pixelBuffer)
+        }
+        settings.bokehEnabled = true
+        settings.syncBokeh = true
+        settings.uniformBlur = true
+        settings.aperture = 1.4
+        let blurred = await pairedPixels(renderer, input: input, matte: background, settings: settings)
+        require(blurred != sharp, "Combined filter fixture must run actual background blur")
+        settings.filter = .warm
+        settings.animateFilters = false
+        let filtered = await pairedPixels(renderer, input: input, matte: background, settings: settings)
+        require(filtered != blurred && filtered[2] > filtered[0],
+                "Warm filter must change the completed background-blur output")
+        settings.filterIntensity = 0
+        let bypassed = await pairedPixels(renderer, input: input, matte: background, settings: settings)
+        require(bypassed == blurred, "Zero filter intensity must preserve the blurred frame")
+        settings.filterIntensity = 1
+        renderer.resetCaptureState()
+        let restarted = await pairedPixels(renderer, input: input, matte: background, settings: settings)
+        require(restarted == filtered, "Capture restart must preserve the chosen filter without old history")
+        print("PASS: actual paired-frame blur plus filters, intensity bypass, and filtered capture restart")
+    }
+
+    @MainActor
     static func checkNeutralRamp(settings: CameraSettings) {
         let width = 220, height = 2
         let input = nv12(width: width, height: height)
@@ -462,5 +496,6 @@ struct RenderChecks {
         checkAnalysisStorage()
         await checkAnalysisTransitions(settings: settings)
         await checkProductionHistory(settings: settings)
+        await checkCombinedFilters(settings: settings)
     }
 }
