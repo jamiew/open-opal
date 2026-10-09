@@ -304,6 +304,122 @@ struct RenderChecks {
         print("PASS: exact-frame pairing, async/sync fencing, stale capture rejection and callback generations")
     }
 
+    static func checkIndependentHistory() {
+        let device = MTLCreateSystemDefaultDevice()!
+        let queue = device.makeCommandQueue()!
+        let pipeline = try! device.makeComputePipelineState(
+            function: device.makeDefaultLibrary()!.makeFunction(name: "temporal_smooth")!)
+        let width = 16, height = 16
+        let prior = (0..<(width * height)).map { Float($0 % width) / Float(width - 1) }
+        let currentValues = prior.map { 1 - $0 }
+        let current = floatTexture(device, values: currentValues, width: width, height: height)
+        var history = floatTexture(device, values: prior, width: width, height: height)
+        var next = floatTexture(device, values: [Float](repeating: 0, count: prior.count),
+                                width: width, height: height)
+        var expected = prior
+        for _ in 0..<3 {
+            let before = floats(history)
+            let command = queue.makeCommandBuffer()!
+            encodeSmooth(command, pipeline: pipeline, current: current, history: history, output: next, alpha: 0.6)
+            command.commit()
+            command.waitUntilCompleted()
+            require(command.status == .completed, "Temporal GPU pass failed")
+            expected = zip(expected, currentValues).map { old, new in
+                let t = min(max((abs(new - old) - 0.15) / 0.35, 0), 1)
+                let alpha: Float = 0.6 + 0.4 * t * t * (3 - 2 * t)
+                return old + (new - old) * alpha
+            }
+            require(floats(history) == before, "Smoothing changed its prior history")
+            require(zip(floats(next), expected).allSatisfy { abs($0 - $1) < 0.00001 },
+                    "Temporal pixels differ from independent prior/output smoothing")
+            swap(&history, &next)
+        }
+    }
+
+    static func checkerInput(width: Int = 320, height: Int = 180) -> CVPixelBuffer {
+        let input = nv12(width: width, height: height)
+        CVPixelBufferLockBaseAddress(input, [])
+        defer { CVPixelBufferUnlockBaseAddress(input, []) }
+        let stride = CVPixelBufferGetBytesPerRowOfPlane(input, 0)
+        let bytes = CVPixelBufferGetBaseAddressOfPlane(input, 0)!.assumingMemoryBound(to: UInt8.self)
+        for y in 0..<height {
+            for x in 0..<width { bytes[y * stride + x] = (x / 3 + y / 3) % 2 == 0 ? 40 : 200 }
+        }
+        return input
+    }
+
+    // Synthetic pixels are immutable after construction, like captured frames.
+    private struct InputFrame: @unchecked Sendable {
+        let buffer: CVPixelBuffer
+    }
+
+    @MainActor
+    static func pairedPixels(_ renderer: BokehRenderer, input: CVPixelBuffer,
+                             matte: MatteResult, settings: CameraSettings) async -> [UInt8] {
+        let capture = renderer.captureGeneration
+        let frame = InputFrame(buffer: input)
+        let prepared = await renderer.analyzeNow(pixelBuffer: frame.buffer, needsDepth: false,
+                                                 captureGeneration: capture)!
+        let paired = BokehRenderer.FrameAnalysis(pixelBuffer: input, generation: prepared.generation,
+                                                 depth: nil, matte: matte, subject: nil)
+        return autoreleasepool {
+            let frame = renderer.render(pixelBuffer: input, settings: RenderSettings(settings),
+                                        captureGeneration: capture, analysisForFrame: paired)!
+            return pixels(frame.pixelBuffer)
+        }
+    }
+
+    @MainActor
+    static func checkProductionHistory(settings: CameraSettings) async {
+        checkIndependentHistory()
+        let device = MTLCreateSystemDefaultDevice()!
+        let pool = AnalysisTexturePool(device: device, format: .r8Unorm, capacity: 4)
+        let sharp = analysisMatte(pool, value: 255)
+        let background = analysisMatte(pool, value: 0)
+        let prior = analysisMatte(pool, value: 128)
+        let current = analysisMatte(pool, value: 153)
+        let input = checkerInput()
+        settings.bokehEnabled = false
+        let renderer = BokehRenderer()!
+        let baseline = autoreleasepool {
+            pixels(renderer.render(pixelBuffer: input, settings: RenderSettings(settings),
+                                   captureGeneration: renderer.captureGeneration)!.pixelBuffer)
+        }
+        settings.bokehEnabled = true
+        settings.syncBokeh = true
+        settings.uniformBlur = true
+        settings.aperture = 1.4
+        let sharpPixels = await pairedPixels(renderer, input: input, matte: sharp, settings: settings)
+        require(sharpPixels == baseline, "This frame's full subject matte must preserve sharp pixels")
+        let blurred = await pairedPixels(renderer, input: input, matte: background, settings: settings)
+        require(blurred != baseline, "This frame's background matte must blur actual GPU pixels")
+        renderer.resetCaptureState()
+        _ = await pairedPixels(renderer, input: input, matte: prior, settings: settings)
+        let warm = await pairedPixels(renderer, input: input, matte: current, settings: settings)
+        let fresh = BokehRenderer()!
+        let cold = await pairedPixels(fresh, input: input, matte: current, settings: settings)
+        require(warm != cold, "Temporal rendering must retain an independent previous matte")
+        renderer.resetCaptureState()
+        let reset = await pairedPixels(renderer, input: input, matte: current, settings: settings)
+        require(reset == cold, "Capture reset must seed history from the current matte")
+        _ = await pairedPixels(renderer, input: input, matte: prior, settings: settings)
+        settings.bokehEnabled = false
+        autoreleasepool {
+            _ = renderer.render(pixelBuffer: input, settings: RenderSettings(settings),
+                                captureGeneration: renderer.captureGeneration)
+        }
+        settings.bokehEnabled = true
+        let restarted = await pairedPixels(renderer, input: input, matte: current, settings: settings)
+        require(restarted == cold, "Mode restart must not mix in old temporal history")
+        _ = await pairedPixels(renderer, input: input, matte: prior, settings: settings)
+        let resized = checkerInput(width: 160, height: 90)
+        let resizedPixels = await pairedPixels(renderer, input: resized, matte: current, settings: settings)
+        let resizedFresh = await pairedPixels(BokehRenderer()!, input: resized, matte: current, settings: settings)
+        require(resizedPixels == resizedFresh, "Resolution change must seed fresh temporal history")
+        require(firstMaskByte(current.texture) == 153, "Rendering changed leased inference output")
+        print("PASS: frame-paired sharp/blur pixels, independent temporal history, capture/mode/resize history reset")
+    }
+
     @MainActor
     static func main() async {
         let domain = "com.openopal.render-checks.\(UUID().uuidString)"
@@ -316,5 +432,6 @@ struct RenderChecks {
         checkOwnedOutput(settings: settings)
         checkAnalysisStorage()
         await checkAnalysisTransitions(settings: settings)
+        await checkProductionHistory(settings: settings)
     }
 }

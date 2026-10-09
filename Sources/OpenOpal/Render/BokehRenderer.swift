@@ -104,6 +104,9 @@ final class BokehRenderer: @unchecked Sendable {
     /// the image. This is the one everything downstream actually uses.
     private var matteRefined: MTLTexture?
     private var size = (w: 0, h: 0)
+    private var historyReady = false
+    private var historyGeneration: UInt64?
+    private var historyUsesDepth = false
 
     /// Latest neural results, written by the analysis task and read by the
     /// render loop. Never blocks the render loop.
@@ -305,6 +308,11 @@ final class BokehRenderer: @unchecked Sendable {
                   analysisForFrame.pixelBuffer === pixelBuffer,
                   analysisForFrame.generation == generation else { return nil }
         }
+        if historyGeneration != generation || historyUsesDepth != !settings.uniformBlur {
+            historyReady = false
+            historyGeneration = generation
+            historyUsesDepth = !settings.uniformBlur
+        }
 
         let w = CVPixelBufferGetWidth(pixelBuffer)
         let h = CVPixelBufferGetHeight(pixelBuffer)
@@ -331,16 +339,18 @@ final class BokehRenderer: @unchecked Sendable {
         let matte = latest.1?.texture
         let u = uniforms(settings, subject: latest.2, w: w, h: h)
         if settings.bokehEnabled, let matte, let cocTex, let blurTex,
-           let depthHistory, let depthHistoryPrev, let matteHistory, let matteRefined,
+           let depthHistory, let depthHistoryPrev, let matteHistory,
+           let matteHistoryPrev, let matteRefined,
            let depth = depth ?? (settings.uniformBlur ? blackTexture() : nil) {
-            var matteAlpha: Float = 0.6
-            guard encode(cmd, smoothPipeline, textures: [matte, matteHistory, matteHistory],
-                         buffer: &matteAlpha, size: (matteHistory.width, matteHistory.height)),
+            var matteAlpha: Float = historyReady ? 0.6 : 1
+            guard encode(cmd, smoothPipeline,
+                         textures: [matte, historyReady ? matteHistory : blackTexture(), matteHistoryPrev],
+                         buffer: &matteAlpha, size: (matteHistoryPrev.width, matteHistoryPrev.height)),
                   encode(cmd, matteRefinePipeline,
-                         textures: [matteHistory, linearTex, matteRefined], size: (w, h)) else { return nil }
-            var depthAlpha: Float = 0.35
+                         textures: [matteHistoryPrev, linearTex, matteRefined], size: (w, h)) else { return nil }
+            var depthAlpha: Float = historyReady ? 0.35 : 1
             guard encode(cmd, depthSmoothPipeline,
-                         textures: [depth, matteRefined, depthHistory, depthHistoryPrev],
+                         textures: [depth, matteRefined, historyReady ? depthHistory : blackTexture(), depthHistoryPrev],
                          buffer: &depthAlpha, size: (depthHistory.width, depthHistory.height)),
                   encode(cmd, cocPipeline, textures: [depthHistoryPrev, matteRefined, cocTex],
                          uniforms: u, size: (w, h)),
@@ -365,6 +375,10 @@ final class BokehRenderer: @unchecked Sendable {
         }
         if updatedHistory {
             swap(&self.depthHistory, &self.depthHistoryPrev)
+            swap(&self.matteHistory, &self.matteHistoryPrev)
+            historyReady = true
+        } else {
+            historyReady = false
         }
         return output
     }
@@ -375,6 +389,8 @@ final class BokehRenderer: @unchecked Sendable {
             let generation = analysis.reset()
             depthProvider?.reset(generation: generation)
             matteProvider?.reset(generation: generation)
+            historyReady = false
+            historyGeneration = nil
             frameIndex = 0
         }
     }
@@ -569,6 +585,7 @@ final class BokehRenderer: @unchecked Sendable {
 
     private func allocate(w: Int, h: Int) {
         size = (w, h)
+        historyReady = false
         func make(_ fmt: MTLPixelFormat, _ tw: Int, _ th: Int) -> MTLTexture? {
             let d = MTLTextureDescriptor.texture2DDescriptor(
                 pixelFormat: fmt, width: tw, height: th, mipmapped: false)
