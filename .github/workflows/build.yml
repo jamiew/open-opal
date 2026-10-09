@@ -16,7 +16,6 @@ on:
 
 permissions:
   contents: read
-
 concurrency:
   # A new push to the same branch supersedes an in-flight run. These builds are
   # slow and there is no value in finishing a stale one.

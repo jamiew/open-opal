@@ -1,12 +1,13 @@
 import Foundation
 
-/// Hardware-free regression test. Compile alongside CameraSettings.swift.
+/// Camera-free regression checks. Compile with CameraSettings.
 @main
 struct CameraSettingsPersistenceTests {
     static func main() throws {
         checkColdConfigurationCompletion()
         let preferences = MemoryPreferences()
         let initial = CameraSettings(preferences: preferences)
+        let defaults = CameraSettings(preferences: MemoryPreferences())
 
         initial.manualFocus = true
         initial.lensPosition = 187
@@ -75,8 +76,8 @@ struct CameraSettingsPersistenceTests {
         precondition(!CameraSettings(preferences: preferences).bokehEnabled)
 
         let effects = CameraSettings(preferences: preferences)
-        effects.focusOnSubject = false
-        precondition(!CameraSettings(preferences: preferences).focusOnSubject)
+        effects.focusOnSubject = true
+        precondition(CameraSettings(preferences: preferences).focusOnSubject)
         effects.limitAfRange = true
         precondition(CameraSettings(preferences: preferences).limitAfRange)
         effects.afRangeInfinity = 70
@@ -96,16 +97,43 @@ struct CameraSettingsPersistenceTests {
         precondition(resetFilter.animateFilters == defaults.animateFilters && resetFilter.limitAfRange)
         effects.reset()
         let resetEffects = CameraSettings(preferences: preferences)
-        precondition(resetEffects.focusOnSubject == defaults.focusOnSubject && !resetEffects.limitAfRange)
+        precondition(!resetEffects.focusOnSubject && !resetEffects.limitAfRange)
         precondition(resetEffects.afRangeInfinity == defaults.afRangeInfinity)
         precondition(resetEffects.afRangeMacro == defaults.afRangeMacro)
+
+        // A tap or automatic subject focus leaves AUTO active for this session,
+        // but a new session must scan again. Preserve manual focus and its lens
+        // position independently, and keep explicitly selected persistent modes.
+        for manual in [false, true] {
+            let focusPreferences = MemoryPreferences()
+            let focus = CameraSettings(preferences: focusPreferences)
+            focus.manualFocus = manual
+            focus.lensPosition = 187
+            focus.focusOnSubject = true
+            focus.limitAfRange = true
+            focus.afRangeInfinity = 70
+            focus.afRangeMacro = 180
+            focus.afMode = .macro
+            precondition(CameraSettings(preferences: focusPreferences).afMode == .macro)
+            focus.afMode = .auto
+            precondition(focus.afMode == .auto)
+            let restarted = CameraSettings(preferences: focusPreferences)
+            precondition(restarted.afMode == .continuousVideo && restarted.manualFocus == manual)
+            precondition(restarted.lensPosition == 187 && restarted.focusOnSubject)
+            precondition(restarted.limitAfRange && restarted.afRangeInfinity == 70 && restarted.afRangeMacro == 180)
+            for mode in [CameraSettings.AFMode.continuousVideo, .macro, .edof] {
+                focus.afMode = mode
+                let selected = CameraSettings(preferences: focusPreferences)
+                precondition(selected.afMode == mode && selected.manualFocus == manual)
+                precondition(selected.lensPosition == 187)
+            }
+        }
         func restore(_ json: String) -> CameraSettings {
             preferences.set(Data(json.utf8), forKey: CameraSettings.persistenceKey)
             return CameraSettings(preferences: preferences)
         }
         let partial = restore(#"{"version":1,"brightness":4}"#)
         precondition(partial.brightness == 4 && partial.lensPosition == 120)
-        precondition(!partial.meterOnSubject)
         precondition(!partial.bokehEnabled && partial.aperture == 2.8)
         precondition(partial.syncBokeh && partial.uniformBlur && partial.matteQuality == .accurate)
         precondition(partial.focusDistance == 0.35 && partial.autoFocusSubject)

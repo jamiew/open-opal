@@ -98,13 +98,13 @@ final class CameraModel {
         }
     }
 
+
     func start() async {
         // A launch request can reopen the window while a previous window task
         // is still booting the camera. There must only be one USB open in flight.
         guard !isStarting, !isRebooting, !device.state.isLive else { return }
         isStarting = true
         defer { isStarting = false }
-
         if renderer == nil, let r = BokehRenderer() {
             if let mtl = MTLCreateSystemDefaultDevice() {
                 // The depth model is loaded lazily — it's 50MB and, in the default
@@ -179,7 +179,6 @@ final class CameraModel {
             }
         }
     }
-
     func stop() { device.shutdown() }
 
     func reconnect() async {

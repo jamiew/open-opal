@@ -198,6 +198,7 @@ final class CameraSettings {
     var filter: CameraFilter = .none { didSet { save() } }
     var filterIntensity: Double = 0.7 { didSet { save() } }
     var animateFilters = true { didSet { save() } }
+
     // MARK: - Bokeh (host-side; see BokehRenderer)
 
     /// Most people want one switch and one slider. Everything else is here for
@@ -302,14 +303,16 @@ final class CameraSettings {
         if let value = saved.meterOnSubject { meterOnSubject = value }
         if let value = saved.manualFocus { manualFocus = value }
         if let value = saved.lensPosition, (0...255).contains(value) { lensPosition = value }
-        // One-shot AUTO is what click-to-focus and face tracking leave behind to
-        // hold a focus. Restoring it would start every session with autofocus
-        // frozen, so a fresh launch goes back to the default mode instead.
+        // One-shot AUTO holds the result of a tap or subject focus. Starting a
+        // fresh session in that mode would leave autofocus frozen.
         if let value = saved.afMode, value != .auto { afMode = value }
         if let value = saved.focusOnSubject { focusOnSubject = value }
         if let value = saved.limitAfRange { limitAfRange = value }
-        if let value = saved.afRangeInfinity, (0...255).contains(value) { afRangeInfinity = value }
-        if let value = saved.afRangeMacro, (0...255).contains(value) { afRangeMacro = value }
+        if let far = saved.afRangeInfinity, let near = saved.afRangeMacro,
+           (0...255).contains(far), (0...255).contains(near), far <= near {
+            afRangeInfinity = far
+            afRangeMacro = near
+        }
         if let value = saved.manualWhiteBalance { manualWhiteBalance = value }
         if let value = saved.whiteBalanceK, (1000...12000).contains(value) { whiteBalanceK = value }
         if let value = saved.awbMode { awbMode = value }
