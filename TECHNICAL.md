@@ -70,11 +70,9 @@ cmake --build build/control-tests --target control_delta_test usb_only_test
 ctest --test-dir build/control-tests --output-on-failure
 ```
 
-The production Metal renderer has a separate camera-free check on Apple silicon.
-It checks completed GPU pixels shared by preview and sink, retained output,
-bounded storage, analysis retention through GPU completion, exact-frame pairing,
-stale capture/mode rejection, temporal history and its reset behavior, and
-recovery after readers release their frames:
+The camera-free Metal checks cover frame ownership, analysis storage, capture
+resets, and temporal history. An absolute neutral video-range ramp also catches
+unwanted darkening:
 
 ```sh
 ./scripts/check-render.sh
@@ -163,6 +161,10 @@ capture, resolution change, analysis-mode change, or interrupted bokeh path
 starts from the current matte instead of blending with old or uninitialized
 history. The check compares GPU history pixels and fresh-versus-warm rendering,
 then checks that capture, mode, and resolution resets match a fresh renderer.
+Linear-light decoding and display encoding use matching sRGB transfer curves.
+With bokeh off, the neutral video-range ramp must round-trip to its absolute
+display levels within one 8-bit step; comparison only against another processed
+frame would miss unwanted darkening.
 
 ### Autofocus
 

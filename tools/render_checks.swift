@@ -421,6 +421,34 @@ struct RenderChecks {
     }
 
     @MainActor
+    static func checkNeutralRamp(settings: CameraSettings) {
+        let width = 220, height = 2
+        let input = nv12(width: width, height: height)
+        CVPixelBufferLockBaseAddress(input, [])
+        let stride = CVPixelBufferGetBytesPerRowOfPlane(input, 0)
+        let bytes = CVPixelBufferGetBaseAddressOfPlane(input, 0)!.assumingMemoryBound(to: UInt8.self)
+        for y in 0..<height {
+            for x in 0..<width { bytes[y * stride + x] = UInt8(16 + x) }
+        }
+        CVPixelBufferUnlockBaseAddress(input, [])
+        settings.bokehEnabled = false
+        let renderer = BokehRenderer()!
+        let frame = renderer.render(pixelBuffer: input, settings: RenderSettings(settings),
+                                    captureGeneration: renderer.captureGeneration)!
+        let actual = pixels(frame.pixelBuffer)
+        for y in 0..<height {
+            for x in 0..<width {
+                let offset = (y * width + x) * 4
+                let expected = Int((Double(x) * 255 / 219).rounded())
+                require(actual[offset + 3] == 255 &&
+                        actual[offset..<(offset + 3)].allSatisfy { abs(Int($0) - expected) <= 1 },
+                        "Neutral video-range ramp must preserve absolute sRGB levels at \(x)")
+            }
+        }
+        print("PASS: absolute neutral video-range ramp through production linear-light rendering")
+    }
+
+    @MainActor
     static func main() async {
         let domain = "com.openopal.render-checks.\(UUID().uuidString)"
         let preferences = UserDefaults(suiteName: domain)!
@@ -429,6 +457,7 @@ struct RenderChecks {
         settings.bokehEnabled = false
         settings.meterOnSubject = false
         settings.focusOnSubject = false
+        checkNeutralRamp(settings: settings)
         checkOwnedOutput(settings: settings)
         checkAnalysisStorage()
         await checkAnalysisTransitions(settings: settings)
