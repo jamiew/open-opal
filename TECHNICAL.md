@@ -119,6 +119,7 @@ fails safely without uploading the pipeline, even if only one unbooted device
 is attached. A USB address change is allowed; an unidentified device is not.
 
 Boots acknowledge captured settings only after success. Failed boots keep changes pending.
+Frame width and height change together under one lock.
 
 ```
 Myriad X (IMX582)
