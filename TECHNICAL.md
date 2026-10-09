@@ -164,6 +164,7 @@ stream serves camera clients and is not a queue for sending our frames.
 
 Invalid sink timestamps are dropped. Only this team's signed host may produce frames.
 Stops discard pending callbacks.
+Failed feeder starts release the copied queue.
 
 **Start OpenOpal automatically** registers a small login helper that listens
 for capture requests on "Open Opal Camera" and opens OpenOpal without taking
