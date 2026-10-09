@@ -175,6 +175,8 @@ the full 0–255 range. Exposure and other unrelated control changes do not rest
 autofocus. Entering manual focus clears the tracking history immediately, so
 returning to automatic focus can refocus even if the person's size has not changed.
 
+Reconnects clear saved face-metering regions and tap holds.
+
 ### Tuning files
 
 Put one `.bin` ISP tuning file in `~/Library/Application Support/OpenOpal/tuning/`
