@@ -1,10 +1,13 @@
 name: OpenOpal
 
 options:
-  bundleIdPrefix: com.jamiedubs
   deploymentTarget:
     macOS: "26.0"
   createIntermediateGroups: true
+
+configFiles:
+  Debug: Config/BuildIdentity.xcconfig
+  Release: Config/BuildIdentity.xcconfig
 
 settings:
   base:
@@ -15,7 +18,6 @@ settings:
     # Builds are unsigned. scripts/sign.sh signs nested libraries, the camera
     # extension, and the app with Developer ID and matching profiles afterward.
     # Changing the team or bundle IDs alone does not enable signed builds.
-    DEVELOPMENT_TEAM: GFU82T28YT
     CODE_SIGN_IDENTITY: "-"
     CODE_SIGNING_REQUIRED: NO
     CODE_SIGNING_ALLOWED: NO
@@ -41,7 +43,7 @@ targets:
         CFBundleDisplayName: Open Opal
         CFBundleIconFile: AppIcon
         CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "1"
+        CFBundleVersion: "7"
         LSMinimumSystemVersion: "26.0"
         LSUIElement: true
         NSHumanReadableCopyright: "Open source. Not affiliated with Opal Camera Inc."
@@ -54,6 +56,8 @@ targets:
         LSApplicationCategoryType: public.app-category.video
         NSSupportsAutomaticTermination: false
         NSSupportsSuddenTermination: false
+        OpenOpalSigningTeam: "$(DEVELOPMENT_TEAM)"
+        OpenOpalAppGroup: "$(OPENOPAL_APP_GROUP)"
     entitlements:
       path: Sources/OpenOpal/OpenOpal.entitlements
       properties:
@@ -69,10 +73,10 @@ targets:
         # cannot associate the app with its team+bundle-ID pair — so it finds no
         # extensions belonging to us and reports the misleading
         # "extensionNotFound". OBS's app carries exactly these two.
-        com.apple.application-identifier: GFU82T28YT.com.jamiedubs.open-opal
-        com.apple.developer.team-identifier: GFU82T28YT
+        com.apple.application-identifier: "$(DEVELOPMENT_TEAM).$(PRODUCT_BUNDLE_IDENTIFIER)"
+        com.apple.developer.team-identifier: "$(DEVELOPMENT_TEAM)"
         com.apple.security.application-groups:
-          - group.com.jamiedubs.open-opal
+          - "$(OPENOPAL_APP_GROUP)"
     dependencies:
       - target: OpenOpalLauncher
         link: false
@@ -95,7 +99,7 @@ targets:
         codeSign: true
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.jamiedubs.open-opal
+        PRODUCT_BUNDLE_IDENTIFIER: "$(OPENOPAL_BUNDLE_IDENTIFIER)"
         SWIFT_OBJC_BRIDGING_HEADER: Sources/OpenOpal/OpenOpal-Bridging-Header.h
         HEADER_SEARCH_PATHS:
           - $(SRCROOT)/Sources/OpalBridge/include
@@ -132,7 +136,7 @@ targets:
       - path: Sources/Shared
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.jamiedubs.open-opal.camera
+        PRODUCT_BUNDLE_IDENTIFIER: "$(OPENOPAL_BUNDLE_IDENTIFIER).camera"
         # The bundle must be NAMED after its identifier — Xcode's system
         # extension template does exactly this (PRODUCT_NAME =
         # $(PRODUCT_BUNDLE_IDENTIFIER)), and OBS ships
@@ -140,39 +144,36 @@ targets:
         # lookup matches on the bundle filename, so a bundle called
         # "OpenOpalCameraExtension.systemextension" is invisible to it and comes
         # back as extensionNotFound — even though the identifier inside is right.
-        PRODUCT_NAME: com.jamiedubs.open-opal.camera
+        PRODUCT_NAME: "$(PRODUCT_BUNDLE_IDENTIFIER)"
         SWIFT_VERSION: "6.0"
     info:
       path: Sources/OpenOpalCameraExtension/Info.plist
       properties:
         CFBundleDisplayName: Open Opal Camera
         CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "1"
+        CFBundleVersion: "7"
         # SYSX marks this bundle as a system extension. Without it, macOS scans
         # Contents/Library/SystemExtensions, fails to recognise the bundle, and
         # reports "Extension not found in App bundle" even though it's right there.
         CFBundlePackageType: SYSX
         NSSystemExtensionUsageDescription: Provides the Open Opal virtual camera that other apps can use.
         CMIOExtension:
-          # Team prefix hardcoded: $(TeamIdentifierPrefix) expands to nothing
-          # because the build itself is unsigned (signing happens post-build in
-          # scripts/sign.sh), and a Mach service name without the team prefix
-          # never matches.
-          CMIOExtensionMachServiceName: group.com.jamiedubs.open-opal.camera
+          # CMIO requires an App Group prefix, not the developer team prefix.
+          CMIOExtensionMachServiceName: "$(OPENOPAL_APP_GROUP).camera"
     entitlements:
       path: Sources/OpenOpalCameraExtension/OpenOpalCameraExtension.entitlements
       properties:
         # CMIO extensions run sandboxed, no exceptions.
         com.apple.security.app-sandbox: true
-        com.apple.application-identifier: GFU82T28YT.com.jamiedubs.open-opal.camera
-        com.apple.developer.team-identifier: GFU82T28YT
+        com.apple.application-identifier: "$(DEVELOPMENT_TEAM).$(PRODUCT_BUNDLE_IDENTIFIER)"
+        com.apple.developer.team-identifier: "$(DEVELOPMENT_TEAM)"
         # THE fix. CMIO validation rejects the extension outright unless its
         # Mach service name is prefixed by one of the App Groups it declares:
         #   "invalid mach service name ... must be prefixed with one of the App
         #    Groups in the entitlement"
         # A bare team-ID prefix is not enough.
         com.apple.security.application-groups:
-          - group.com.jamiedubs.open-opal
+          - "$(OPENOPAL_APP_GROUP)"
 
   OpenOpalLauncher:
     type: application
@@ -182,7 +183,7 @@ targets:
       - path: Sources/Shared
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.jamiedubs.open-opal.launcher
+        PRODUCT_BUNDLE_IDENTIFIER: "$(OPENOPAL_BUNDLE_IDENTIFIER).launcher"
         PRODUCT_NAME: OpenOpalLauncher
         SKIP_INSTALL: YES
     info:
@@ -191,7 +192,7 @@ targets:
         CFBundleName: OpenOpal Launcher
         CFBundleDisplayName: OpenOpal Launcher
         CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "1"
+        CFBundleVersion: "7"
         LSMinimumSystemVersion: "26.0"
         LSUIElement: true
         NSSupportsAutomaticTermination: false

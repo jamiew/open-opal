@@ -50,13 +50,10 @@ struct Inspector: View {
                     }
                 }
 
-                Section("Filters", icon: "camera.filters", in: glass) {
-                    FilterBrowser(settings: settings)
-                }
-
                 Section("Image", icon: "person.crop.square", in: glass) {
-                    Toggle("Mirror preview", isOn: $settings.mirrorPreview)
+                    Toggle("Mirror", isOn: $settings.mirrorOutput)
                     Toggle("Expose for my face", isOn: $settings.meterOnSubject)
+                    Note("Image controls apply to both the preview and virtual camera.", tone: .hint)
                 }
 
                 Section("Virtual Camera", icon: "video.badge.checkmark", in: glass) {
@@ -111,7 +108,7 @@ struct Inspector: View {
                             Note("This build supports camera controls and preview. Use a signed extension build to make the camera available to video apps.",
                                  tone: .hint)
                         } else {
-                            Note("Puts the processed image — background blur and filters included — into every video app as “Open Opal Camera”.",
+                            Note("Puts the processed image, including background blur, into every video app as “Open Opal Camera”.",
                                  tone: .hint)
                             Button {
                                 camera.installer.install()
@@ -256,7 +253,6 @@ struct Inspector: View {
                     }
 
                     Toggle("Rotate 180°", isOn: $settings.rotate180)
-                    Toggle("Mirror preview", isOn: $settings.mirrorPreview)
 
                     if settings.rotate180 {
                         Note("The C1's sensor is mounted upside down. Rotation happens on the camera, so it costs nothing.",
@@ -488,7 +484,6 @@ struct Inspector: View {
 
                 Button("Reset all") {
                     camera.settings.reset()
-                    camera.settings.resetBokeh()
                     camera.push()
                 }
                 .glassButtonStyle()

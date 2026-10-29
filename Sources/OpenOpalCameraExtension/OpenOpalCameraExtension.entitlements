@@ -3,14 +3,14 @@
 <plist version="1.0">
 <dict>
 	<key>com.apple.application-identifier</key>
-	<string>GFU82T28YT.com.jamiedubs.open-opal.camera</string>
+	<string>$(DEVELOPMENT_TEAM).$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>com.apple.developer.team-identifier</key>
-	<string>GFU82T28YT</string>
+	<string>$(DEVELOPMENT_TEAM)</string>
 	<key>com.apple.security.app-sandbox</key>
 	<true/>
 	<key>com.apple.security.application-groups</key>
 	<array>
-		<string>group.com.jamiedubs.open-opal</string>
+		<string>$(OPENOPAL_APP_GROUP)</string>
 	</array>
 </dict>
 </plist>

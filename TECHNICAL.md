@@ -6,9 +6,9 @@ hardware. For signing and releases, see [docs/SIGNING.md](docs/SIGNING.md) and
 
 ## Building
 
-This experimental branch runs on Apple silicon Macs with macOS 26 or later.
-Its native Generate & Edit panel uses Foundation Models. Upstream's app without
-these filters supports macOS 14; the compatibility wrappers remain shared here.
+The production-only `develop` branch runs on Apple silicon Macs with macOS 26
+or later. Filters and Generate & Edit are kept on the local `experiments`
+branch, not in this build. Window docking remains supported.
 
 Building needs Xcode 26 or newer and `brew install cmake ninja xcodegen`.
 
@@ -19,13 +19,18 @@ xcodegen generate
 open OpenOpal.xcodeproj    # then build & run from Xcode (⌘R)
 ```
 
-To build from the command line and install to /Applications:
+For an unsigned command-line build:
 
 ```sh
 xcodebuild -project OpenOpal.xcodeproj -scheme OpenOpal \
-  -configuration Release -derivedDataPath build/DerivedData build
-cp -R build/DerivedData/Build/Products/Release/OpenOpal.app /Applications/
+  -configuration Release -derivedDataPath build/DerivedData clean build
 ```
+
+`Config/BuildIdentity.xcconfig` holds safe unsigned defaults. An optional ignored
+`Config/BuildIdentity.local.xcconfig` sets the team, host bundle ID, and App Group.
+The extension ID/product name, launcher ID, Mach service and entitlements derive
+from those settings. See [SIGNING.md](docs/SIGNING.md) for the signed build and
+notarization workflow; do not install an unsigned replacement over a signed app.
 
 Use Release builds for day-to-day use — Debug builds noticeably stutter in UI
 animations.
@@ -79,6 +84,26 @@ unwanted darkening:
 ./scripts/check-render.sh
 ```
 
+The integrated checks use the installed app and isolated preferences:
+
+```sh
+bash scripts/check-camera.sh /Applications/OpenOpal.app
+```
+
+This path does not access USB or CMIO. With explicit camera takeover permission,
+the live path exercises real capture and virtual-camera readback:
+
+```sh
+bash scripts/check-camera.sh /Applications/OpenOpal.app --live-takeover
+```
+
+Warn other camera users first. Live takeover remains RAM-only and does not
+change saved user controls or record pixels. JSON-lines results distinguish
+failure (exit 1) from unverified evidence (exit 2). Missing prior camera
+permission does not trigger a headless TCC prompt. Optical/chart checks, physical
+unplug/replug, and GUI behavior need separate observation; software reconnect
+does not prove them. No result for the replacement build is implied here.
+
 ## The hardware
 
 Little of this is documented elsewhere, so for the record:
@@ -113,6 +138,10 @@ the camera back to its stock firmware within a few seconds. Nothing is ever
 written to flash, so the takeover can't brick anything. The app narrates
 each stage live while connecting, with real sizes and timings.
 
+The physical C1 light can remain off while this RAM-loaded pipeline captures.
+Its electrical cause and a safe LED-control command are not established. The
+light is not a privacy guarantee; unplug the camera for hardware assurance.
+
 For first-generation IMX378 C1s, the stock camera must present both video and
 audio interfaces before Open Opal attempts the handoff. Every reconnect must
 report the selected camera's MxID. If that ID disappears or changes, Open Opal
@@ -129,9 +158,9 @@ Myriad X (IMX582)
                                                               │
                               IOSurface CVPixelBuffer ◄───────┘  (the only copy)
                                         │
-              Metal: NV12 → linear RGB → mask → blur → composite
+              Metal: NV12 → linear RGB → mask → blur → composite + optional mirror
                                         │
-                                 SwiftUI preview
+                       shared owned frame → preview + virtual camera
 ```
 
 The background blur uses Vision person segmentation. Synchronous bokeh pairs
@@ -150,6 +179,11 @@ Preview and virtual-camera consumers retain the same completed render output.
 Later frames, including a resolution change, cannot overwrite pixels still
 owned by a reader. When all output slots are retained, rendering drops a frame
 instead of recycling live storage.
+
+Mirror output defaults to false. The final Metal composite applies the optional
+horizontal flip once, before preview and virtual-camera consumers receive the
+same frame. The preview has no extra display-only flip. This setting does not
+alter the sensor's physical upside-down orientation correction.
 
 Matte and depth results keep their storage until every analysis or GPU reader
 finishes. Capture resets and sync-mode changes reject earlier results and
@@ -200,9 +234,10 @@ When the app isn't running it shows a camera-off symbol. The fallback contains
 no text, so it stays understandable in mirrored self-views and in the normal
 video other participants receive.
 
-Virtual-camera output is always 1920×1080 BGRA, matching the extension's
-advertised format. Other input sizes are scaled to fit with black bars rather
-than stretched; native 1080p BGRA frames pass through without an extra copy.
+The virtual camera advertises 1920×1080 BGRA at 30 fps independently of sensor
+capture settings; actual frame delivery depends on capture and rendering speed.
+Other input sizes are scaled to fit with black bars rather than stretched;
+native 1080p BGRA frames pass through without an extra conversion copy.
 The feeder uses the device's output scope and playback stream. The capture
 stream serves camera clients and is not a queue for sending our frames.
 

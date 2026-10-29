@@ -69,7 +69,7 @@ final class OpalDevice {
     private var telemetryTimer: Timer?
     /// A close still in flight. Connecting waits for it, so two XLink sessions
     /// never fight over one camera.
-    private var closing: Task<Void, Never>?
+    private var closing: Task<Bool, Never>?
     private var isConnecting = false
 
     init() {
@@ -121,10 +121,9 @@ final class OpalDevice {
         state = .searching
         bootLog.removeAll()
 
-        if let closing {
-            await closing.value
-            self.closing = nil
-        }
+        // Normal recovery retains its bounded-close behavior; diagnostics can
+        // inspect the result explicitly and refuse a reopen after timeout.
+        _ = await waitForClose()
 
         let deadline = Date().addingTimeInterval(20)
         var target: Discovered?
@@ -238,7 +237,16 @@ final class OpalDevice {
                 log.warning("camera did not close within 5s; continuing without it")
                 self?.bootLog.append("[close] camera did not respond; continuing without it")
             }
+            return closed
         }
+    }
+
+    /// Whether the tracked native close completed, rather than merely timing out.
+    func waitForClose() async -> Bool {
+        guard let closing else { return true }
+        let closed = await closing.value
+        self.closing = nil
+        return closed
     }
 
     /// For app termination: try to close cleanly so the camera returns to its

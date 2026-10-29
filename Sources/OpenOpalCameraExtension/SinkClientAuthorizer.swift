@@ -3,8 +3,8 @@ import Security
 
 /// Trust the host identifier and Apple developer team sealed into this extension.
 struct SinkClientAuthorizer {
-    private let hostIdentifier: String
     private let requirement: SecRequirement
+    private let hostInfoPlist: Data
 
     init?() {
         let flags = SecCSFlags()
@@ -21,11 +21,13 @@ struct SinkClientAuthorizer {
               let identifier = values[kSecCodeInfoIdentifier as String] as? String,
               identifier.hasSuffix(".camera"),
               let team = values[kSecCodeInfoTeamIdentifier as String] as? String else { return nil }
+        guard let hostInfoURL = Bundle.main.url(forResource: "OpenOpalHostInfo", withExtension: "plist"),
+              let hostInfoPlist = try? Data(contentsOf: hostInfoURL) else { return nil }
         self.init(hostIdentifier: String(identifier.dropLast(".camera".count)),
-                  teamIdentifier: team)
+                  teamIdentifier: team, hostInfoPlist: hostInfoPlist)
     }
 
-    init?(hostIdentifier: String, teamIdentifier: String) {
+    init?(hostIdentifier: String, teamIdentifier: String, hostInfoPlist: Data) {
         guard !hostIdentifier.isEmpty, !teamIdentifier.isEmpty else { return nil }
         func quoted(_ value: String) -> String {
             "\"" + value.replacingOccurrences(of: "\\", with: "\\\\")
@@ -37,14 +39,19 @@ struct SinkClientAuthorizer {
         guard SecRequirementCreateWithString(expression as CFString, SecCSFlags(),
                                              &requirement) == errSecSuccess,
               let requirement else { return nil }
-        self.hostIdentifier = hostIdentifier
         self.requirement = requirement
+        self.hostInfoPlist = hostInfoPlist
     }
 
-    func isAuthorized(signingID: String?, pid: pid_t) -> Bool {
-        guard signingID == hostIdentifier, pid > 0 else { return false }
+    /// CMIO can report an unknown signing ID. Check the process without reading its files.
+    func isAuthorized(pid: pid_t) -> Bool {
+        guard pid > 0 else { return false }
         var code: SecCode?
-        let attributes = [kSecGuestAttributePid as String: NSNumber(value: pid)] as CFDictionary
+        let attributes = [
+            kSecGuestAttributePid as String: NSNumber(value: pid),
+            kSecGuestAttributeDynamicCode as String: true,
+            kSecGuestAttributeDynamicCodeInfoPlist as String: hostInfoPlist
+        ] as CFDictionary
         guard SecCodeCopyGuestWithAttributes(nil, attributes, SecCSFlags(), &code)
                 == errSecSuccess, let code else { return false }
         return SecCodeCheckValidity(code, SecCSFlags(), requirement) == errSecSuccess

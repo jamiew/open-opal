@@ -64,7 +64,6 @@ struct MenuBarFlyout: View {
                         GeometryReader { preview in
                             MetalPreview(
                                 frame: camera.latestFrame,
-                                mirrored: camera.settings.mirrorPreview,
                                 paused: camera.previewPaused
                             ) { viewPoint, sensorPoint in
                                 camera.focus(at: sensorPoint)

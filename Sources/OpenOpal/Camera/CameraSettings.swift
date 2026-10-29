@@ -8,7 +8,7 @@ import Observation
 ///    frame or two.
 ///  - **cold** settings (resolution, fps) are baked into the device pipeline and
 ///    require a reboot of the Myriad — roughly 2-5 seconds of black.
-/// Host-side bokeh and filters apply immediately without changing the device pipeline.
+/// Host-side bokeh and mirroring apply without changing the device pipeline.
 @Observable
 final class CameraSettings {
 
@@ -23,10 +23,8 @@ final class CameraSettings {
     /// why it's a cold setting.
     var rotate180 = true                  { didSet { if oldValue != rotate180 { coldSettingChanged() } } }
 
-    /// Preview only. A webcam preview should read like a mirror, but the image
-    /// other people see must NOT be mirrored or your text comes out backwards —
-    /// so this never touches the frames themselves.
-    var mirrorPreview = true { didSet { save() } }
+    /// Mirror the shared image once, before preview and virtual-camera delivery.
+    var mirrorOutput = false { didSet { save() } }
 
     /// Set when a cold setting changed and the pipeline needs a reboot to catch up.
     private(set) var coldDirty = false
@@ -192,13 +190,6 @@ final class CameraSettings {
     var contrast: Int = 0 { didSet { save() } } // -10..10
     var saturation: Int = 0 { didSet { save() } } // -10..10
 
-
-    // MARK: - Filters (host-side; no camera restart)
-
-    var filter: CameraFilter = .none { didSet { save() } }
-    var filterIntensity: Double = 0.7 { didSet { save() } }
-    var animateFilters = true { didSet { save() } }
-
     // MARK: - Bokeh (host-side; see BokehRenderer)
 
     /// Most people want one switch and one slider. Everything else is here for
@@ -294,7 +285,7 @@ final class CameraSettings {
         if let value = saved.outputMode { outputMode = value }
         if let value = saved.fps, (1...outputMode.maxFps).contains(value) { fps = value }
         if let value = saved.rotate180 { rotate180 = value }
-        if let value = saved.mirrorPreview { mirrorPreview = value }
+        if let value = saved.mirrorOutput { mirrorOutput = value }
         if let value = saved.autoExposure { autoExposure = value }
         if let value = saved.exposureUs, (1...maxExposureUs).contains(value) { exposureUs = value }
         if let value = saved.iso, (100...1600).contains(value) { iso = value }
@@ -324,9 +315,6 @@ final class CameraSettings {
         if let value = saved.brightness, (-10...10).contains(value) { brightness = value }
         if let value = saved.contrast, (-10...10).contains(value) { contrast = value }
         if let value = saved.saturation, (-10...10).contains(value) { saturation = value }
-        if let value = saved.filter, let selected = CameraFilter(rawValue: value) { filter = selected }
-        if let value = saved.filterIntensity, (0...1).contains(value) { filterIntensity = value }
-        if let value = saved.animateFilters { animateFilters = value }
         if let value = saved.showAdvanced { showAdvanced = value }
         if let value = saved.bokehEnabled { bokehEnabled = value }
         if let value = saved.syncBokeh { syncBokeh = value }
@@ -345,7 +333,7 @@ final class CameraSettings {
             outputMode: outputMode,
             fps: fps,
             rotate180: rotate180,
-            mirrorPreview: mirrorPreview,
+            mirrorOutput: mirrorOutput,
             autoExposure: autoExposure,
             exposureUs: exposureUs,
             iso: iso,
@@ -370,9 +358,6 @@ final class CameraSettings {
             brightness: brightness,
             contrast: contrast,
             saturation: saturation,
-            filter: filter.rawValue,
-            filterIntensity: filterIntensity,
-            animateFilters: animateFilters,
             showAdvanced: showAdvanced,
             bokehEnabled: bokehEnabled,
             syncBokeh: syncBokeh,
@@ -395,7 +380,7 @@ final class CameraSettings {
         var outputMode: OutputMode?
         var fps: Int?
         var rotate180: Bool?
-        var mirrorPreview: Bool?
+        var mirrorOutput: Bool?
         var autoExposure: Bool?
         var exposureUs: Int?
         var iso: Int?
@@ -420,9 +405,6 @@ final class CameraSettings {
         var brightness: Int?
         var contrast: Int?
         var saturation: Int?
-        var filter: String?
-        var filterIntensity: Double?
-        var animateFilters: Bool?
         var showAdvanced: Bool?
         var bokehEnabled: Bool?
         var syncBokeh: Bool?
@@ -438,19 +420,20 @@ final class CameraSettings {
     // MARK: - Presets
 
     func resetBokeh() {
-        blurAmount = 0.7
+        bokehEnabled = false
+        aperture = 2.8
         uniformBlur = true
         syncBokeh = true
         matteQuality = .accurate
-    }
-
-    func resetFilters() {
-        filter = .none
-        filterIntensity = 0.7
-        animateFilters = true
+        focusDistance = 0.35
+        autoFocusSubject = true
+        apertureShape = .circular
+        highlightBloom = 0.55
     }
 
     func reset() {
+        outputMode = .fhd1080; fps = 30; rotate180 = true
+        mirrorOutput = false
         autoExposure = true; evCompensation = 0; aeLock = false
         meterOnSubject = false
         exposureUs = 8_000; iso = 400
@@ -461,7 +444,7 @@ final class CameraSettings {
         antiBanding = .hz60
         sharpness = 1; lumaDenoise = 1; chromaDenoise = 1
         brightness = 0; contrast = 0; saturation = 0
-        resetFilters()
+        resetBokeh()
     }
 }
 

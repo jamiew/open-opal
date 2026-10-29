@@ -82,6 +82,8 @@ jobs:
           NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
           NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
           NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+          OPENOPAL_BUNDLE_IDENTIFIER: ${{ vars.OPENOPAL_BUNDLE_IDENTIFIER }}
+          OPENOPAL_APP_GROUP: ${{ vars.OPENOPAL_APP_GROUP }}
         run: ./scripts/release.sh
 
       - name: Package DMG

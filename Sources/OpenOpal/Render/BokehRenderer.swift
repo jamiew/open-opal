@@ -12,7 +12,7 @@ private let log = Logger(subsystem: "com.openopal", category: "render")
 /// into Metal textures via CVMetalTextureCache — no copy, no CPU colour
 /// conversion. From there:
 ///
-///     NV12 ──► linear RGB ──► [depth + matte] ──► CoC ──► gather ──► composite ──► filters
+///     NV12 ──► linear RGB ──► [depth + matte] ──► CoC ──► gather ──► shared output
 ///
 /// Asynchronous analysis supplies the latest current result without stalling.
 /// Synchronous callers wait for analysis paired with the exact input frame.
@@ -35,9 +35,7 @@ struct RenderSettings: Sendable {
     var aperture: Double
     var hexIris: Bool
     var highlightBloom: Double
-    var filter: CameraFilter
-    var filterIntensity: Double
-    var animateFilters: Bool
+    var mirrorOutput: Bool
 
     @MainActor
     init(_ s: CameraSettings) {
@@ -54,9 +52,7 @@ struct RenderSettings: Sendable {
         aperture = s.aperture
         hexIris = s.apertureShape == .hexagonal
         highlightBloom = s.highlightBloom
-        filter = s.filter
-        filterIntensity = s.filterIntensity
-        animateFilters = s.animateFilters
+        mirrorOutput = s.mirrorOutput
     }
 }
 
@@ -65,6 +61,7 @@ struct RenderSettings: Sendable {
 struct RenderedFrame: @unchecked Sendable {
     let texture: MTLTexture
     let pixelBuffer: CVPixelBuffer
+    let mirrored: Bool
     fileprivate let backing: CVMetalTexture
 }
 
@@ -88,16 +85,11 @@ final class BokehRenderer: @unchecked Sendable {
     private let depthSmoothPipeline: MTLComputePipelineState
     private let matteRefinePipeline: MTLComputePipelineState
     private let matteStabilizePipeline: MTLComputePipelineState
-    private let effects: CameraEffects
-    private let faceTracker = FaceTracker()
-    private let effectsEpoch = ProcessInfo.processInfo.systemUptime
 
     // Intermediates, reallocated only when the frame size changes.
     private var linearTex: MTLTexture?
     private var cocTex: MTLTexture?
     private var blurTex: MTLTexture?
-    /// Allocated only when a filter has something to draw.
-    private var effectInput: MTLTexture?
     private var depthTex: MTLTexture?
     private var matteTex: MTLTexture?
     // Ping-pong: depth_smooth reads one and writes the other, because it now
@@ -134,6 +126,7 @@ final class BokehRenderer: @unchecked Sendable {
         var apertureBlades: Int32
         var matteStrength: Float
         var useDepth: Int32
+        var mirrorOutput: Int32
     }
 
     init?() {
@@ -162,13 +155,11 @@ final class BokehRenderer: @unchecked Sendable {
               let e = pipeline("temporal_smooth"),
               let f = pipeline("depth_smooth"),
               let g = pipeline("matte_refine"),
-              let i = pipeline("matte_stabilize"),
-              let effects = CameraEffects(device: device, library: library) else { return nil }
+              let i = pipeline("matte_stabilize") else { return nil }
 
         nv12Pipeline = a; cocPipeline = b; gatherPipeline = c
         compositePipeline = d; smoothPipeline = e; depthSmoothPipeline = f
         matteRefinePipeline = g; matteStabilizePipeline = i
-        self.effects = effects
 
         CVMetalTextureCacheCreate(nil, nil, device, nil, &textureCache)
     }
@@ -330,34 +321,14 @@ final class BokehRenderer: @unchecked Sendable {
 
         let w = CVPixelBufferGetWidth(pixelBuffer)
         let h = CVPixelBufferGetHeight(pixelBuffer)
-        let face = faceTracker.update(
-            pixelBuffer: pixelBuffer,
-            enabled: settings.filter.requiresFace && settings.filterIntensity.isFinite &&
-                settings.filterIntensity > 0)
 
         guard let luma = makeTexture(pixelBuffer, plane: 0, format: .r8Unorm),
               let chroma = makeTexture(pixelBuffer, plane: 1, format: .rg8Unorm) else { return nil }
         if size != (w, h) { allocate(w: w, h: h) }
-        guard let linearTex, let output = makeOutputFrame(w: w, h: h),
+        guard let linearTex,
+              let output = makeOutputFrame(w: w, h: h, mirrored: settings.mirrorOutput),
               let cmd = queue.makeCommandBuffer() else { return nil }
 
-        let filtering = CameraEffects.isActive(filter: settings.filter,
-                                               intensity: settings.filterIntensity, face: face)
-        let compositeTarget: MTLTexture
-        if filtering {
-            if effectInput == nil {
-                let descriptor = MTLTextureDescriptor.texture2DDescriptor(
-                    pixelFormat: .bgra8Unorm, width: w, height: h, mipmapped: false)
-                descriptor.usage = [.shaderRead, .shaderWrite]
-                descriptor.storageMode = .private
-                effectInput = device.makeTexture(descriptor: descriptor)
-            }
-            guard let effectInput else { return nil }
-            compositeTarget = effectInput
-        } else {
-            // Inactive filters need no extra pass or full-frame allocation.
-            compositeTarget = output.texture
-        }
 
         guard encode(cmd, nv12Pipeline, textures: [luma.texture, chroma.texture, linearTex],
                      size: (w, h)) else { return nil }
@@ -398,15 +369,8 @@ final class BokehRenderer: @unchecked Sendable {
             compositeCoC = cocTex
         }
         guard encode(cmd, compositePipeline,
-                     textures: [linearTex, compositeBlur, compositeCoC, compositeTarget],
+                     textures: [linearTex, compositeBlur, compositeCoC, output.texture],
                      uniforms: u, size: (w, h)) else { return nil }
-        if filtering {
-            guard effects.encode(commandBuffer: cmd, source: compositeTarget,
-                                 destination: output.texture, filter: settings.filter,
-                                 intensity: settings.filterIntensity, face: face,
-                                 time: settings.animateFilters && settings.filter.isAnimated
-                                    ? ProcessInfo.processInfo.systemUptime - effectsEpoch : 0) else { return nil }
-        }
 
         // Keep source wrappers, owned output, and analysis leases alive for GPU use.
         withExtendedLifetime((pixelBuffer, luma, chroma, output, latest, analysisForFrame)) {
@@ -433,7 +397,6 @@ final class BokehRenderer: @unchecked Sendable {
             let generation = analysis.reset()
             depthProvider?.reset(generation: generation)
             matteProvider?.reset(generation: generation)
-            faceTracker.reset()
             historyReady = false
             historyGeneration = nil
             frameIndex = 0
@@ -549,7 +512,7 @@ final class BokehRenderer: @unchecked Sendable {
         kCVMetalTextureUsage as String: MTLTextureUsage.shaderRead.union(.shaderWrite).rawValue
     ] as CFDictionary
 
-    private func makeOutputFrame(w: Int, h: Int) -> RenderedFrame? {
+    private func makeOutputFrame(w: Int, h: Int, mirrored: Bool) -> RenderedFrame? {
         if outputPool == nil || outputSize != (w, h) {
             let attrs: [String: Any] = [
                 kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
@@ -578,7 +541,8 @@ final class BokehRenderer: @unchecked Sendable {
                               kCVImageBufferColorPrimaries_ITU_R_709_2, .shouldPropagate)
         CVBufferSetAttachment(buffer, kCVImageBufferTransferFunctionKey,
                               kCVImageBufferTransferFunction_sRGB, .shouldPropagate)
-        return RenderedFrame(texture: texture, pixelBuffer: buffer, backing: backing)
+        return RenderedFrame(texture: texture, pixelBuffer: buffer,
+                             mirrored: mirrored, backing: backing)
     }
 
     // MARK: - Plumbing
@@ -606,7 +570,8 @@ final class BokehRenderer: @unchecked Sendable {
             highlightThresh: 0.75,
             apertureBlades: s.hexIris ? 6 : 0,
             matteStrength: s.autoFocusSubject ? 0.9 : 0.0,
-            useDepth: s.uniformBlur ? 0 : 1
+            useDepth: s.uniformBlur ? 0 : 1,
+            mirrorOutput: s.mirrorOutput ? 1 : 0
         )
     }
 
@@ -643,7 +608,6 @@ final class BokehRenderer: @unchecked Sendable {
         linearTex = make(.rgba16Float, w, h)
         blurTex   = make(.rgba16Float, w, h)
         cocTex    = make(.r16Float, w, h)
-        effectInput = nil
 
         // Depth Anything V2 has a FIXED 518x392 output — not square, and not
         // resizable. Match it exactly or the history won't line up.

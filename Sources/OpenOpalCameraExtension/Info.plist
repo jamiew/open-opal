@@ -19,11 +19,11 @@
 	<key>CFBundleShortVersionString</key>
 	<string>0.1.0</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>7</string>
 	<key>CMIOExtension</key>
 	<dict>
 		<key>CMIOExtensionMachServiceName</key>
-		<string>group.com.jamiedubs.open-opal.camera</string>
+		<string>$(OPENOPAL_APP_GROUP).camera</string>
 	</dict>
 	<key>NSSystemExtensionUsageDescription</key>
 	<string>Provides the Open Opal virtual camera that other apps can use.</string>

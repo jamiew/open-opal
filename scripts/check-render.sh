@@ -13,6 +13,8 @@ xcrun -sdk macosx metallib "$WORK"/*.air -o "$WORK/default.metallib"
 xcrun swiftc -swift-version 6 -target arm64-apple-macosx26.0 -parse-as-library \
     "$ROOT"/Sources/OpenOpal/Render/*.swift \
     "$ROOT/Sources/OpenOpal/Camera/CameraSettings.swift" \
+    "$ROOT/Sources/OpenOpal/UI/MetalPreview.swift" \
+    "$ROOT/Sources/OpenOpal/VirtualCamera/VirtualCameraFrameConverter.swift" \
     "$ROOT/tools/render_checks.swift" \
     -o "$WORK/render-checks"
 "$WORK/render-checks"

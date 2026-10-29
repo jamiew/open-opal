@@ -12,7 +12,7 @@
 #
 # Requires a keychain profile created once with:
 #   xcrun notarytool store-credentials openopal \
-#     --apple-id <you@example.com> --team-id GFU82T28YT
+#     --apple-id <you@example.com> --team-id <YOUR_TEAM_ID>
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -23,10 +23,21 @@ DERIVED="build/DerivedData"
 APP="$DERIVED/Build/Products/Release/OpenOpal.app"
 ZIP="build/OpenOpal.zip"
 
+echo "==> preparing build identity"
+# Local builds use the optional xcconfig override. CI supplies nonsecret identity
+# settings as repository variables, separate from certificates and credentials.
+set --
+if [ -n "${CI:-}" ]; then
+  set -- "DEVELOPMENT_TEAM=${NOTARY_TEAM_ID:?set NOTARY_TEAM_ID}" \
+    "OPENOPAL_BUNDLE_IDENTIFIER=${OPENOPAL_BUNDLE_IDENTIFIER:?set OPENOPAL_BUNDLE_IDENTIFIER}" \
+    "OPENOPAL_APP_GROUP=${OPENOPAL_APP_GROUP:?set OPENOPAL_APP_GROUP}"
+fi
+mkdir -p build
+
 echo "==> building (Release)"
 xcodegen generate >/dev/null
 xcodebuild -project OpenOpal.xcodeproj -scheme OpenOpal \
-  -configuration Release -derivedDataPath "$DERIVED" clean build \
+  -configuration Release -derivedDataPath "$DERIVED" "$@" clean build \
   > build/xcodebuild.log 2>&1 || { tail -25 build/xcodebuild.log; exit 1; }
 
 echo "==> bundling runtime dependencies"

@@ -19,7 +19,7 @@ final class CameraModel {
     let installer = ExtensionInstaller()
     let autoLaunch = AutoLaunchController()
     let feeder = VirtualCameraFeeder()
-    private var feederPollStarted = false
+    private var feederPollTask: Task<Void, Never>?
     private var isStarting = false
 
     init(preferences: UserDefaults = .standard) {
@@ -77,6 +77,7 @@ final class CameraModel {
 
     private func resetCaptureTracking() {
         captureGeneration = gate.invalidate()
+        latestFrame = nil
         resetFocusTracking()
         meteringSession.reset()
         renderer?.resetCaptureState()
@@ -117,10 +118,9 @@ final class CameraModel {
 
         configureFrameDelivery()
 
-        if !feederPollStarted {
-            feederPollStarted = true
-            Task { [feeder] in
-                while true {
+        if feederPollTask == nil {
+            feederPollTask = Task { [feeder] in
+                while !Task.isCancelled {
                     feeder.connectIfNeeded()
                     try? await Task.sleep(for: .seconds(3))
                 }
@@ -179,7 +179,23 @@ final class CameraModel {
             }
         }
     }
-    func stop() { device.shutdown() }
+    func stop() {
+        feederPollTask?.cancel()
+        feederPollTask = nil
+        feeder.disconnect()
+        device.shutdown()
+    }
+
+    /// Diagnostics must prove native close completed before attempting a reopen;
+    /// termination-only shutdown intentionally offers no such restart guarantee.
+    func stopForRestart() async -> Bool {
+        guard !isStarting, !isRebooting else { return false }
+        feederPollTask?.cancel()
+        feederPollTask = nil
+        feeder.disconnect()
+        device.disconnect()
+        return await device.waitForClose()
+    }
 
     func reconnect() async {
         guard !isStarting, !isRebooting else { return }

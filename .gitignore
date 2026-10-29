@@ -15,7 +15,7 @@ xcuserdata/
 .swiftpm/
 .build/
 
-# The Xcode project is generated from project.yml by XcodeGen (`make project`),
+# The Xcode project is generated from project.yml by XcodeGen (`xcodegen generate`),
 # so it's a build artifact, not source. Regenerate it, don't commit it.
 OpenOpal.xcodeproj/
 
@@ -46,9 +46,9 @@ __pycache__/
 # and certificate) and get regenerated whenever capabilities change. Anyone
 # forking this needs to mint their own — see docs/SIGNING.md.
 Provisioning/
+Config/BuildIdentity.local.xcconfig
 
-# The Developer ID private key lives in ~/Library/Application Support/OpenOpal
-# and must never be near the repo. Belt and braces:
+# Keep signing private keys in Keychain, never in the repo:
 *.key
 *.csr
 *.cer

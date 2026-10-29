@@ -1,0 +1,7 @@
+// Unsigned development defaults; these do not claim a registered Apple identity.
+DEVELOPMENT_TEAM =
+OPENOPAL_BUNDLE_IDENTIFIER = com.example.open-opal
+OPENOPAL_APP_GROUP = group.$(OPENOPAL_BUNDLE_IDENTIFIER)
+
+// Account-specific, nonsecret settings. Never store certificates or passwords here.
+#include? "BuildIdentity.local.xcconfig"

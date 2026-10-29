@@ -21,7 +21,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>0.1.0</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>7</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.video</string>
 	<key>LSMinimumSystemVersion</key>
@@ -38,5 +38,9 @@
 	<false/>
 	<key>NSSystemExtensionUsageDescription</key>
 	<string>Open Opal installs a virtual camera so other apps can use your processed video.</string>
+	<key>OpenOpalAppGroup</key>
+	<string>$(OPENOPAL_APP_GROUP)</string>
+	<key>OpenOpalSigningTeam</key>
+	<string>$(DEVELOPMENT_TEAM)</string>
 </dict>
 </plist>

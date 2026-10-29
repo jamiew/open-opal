@@ -11,7 +11,6 @@ import simd
 /// reaches the edges.
 struct MetalPreview: NSViewRepresentable {
     var frame: RenderedFrame?
-    var mirrored: Bool
     /// Freezes the draw loop (shows the last frame). Used while panel
     /// animations run so the glass above isn't re-blurring moving video.
     var paused: Bool = false
@@ -40,7 +39,6 @@ struct MetalPreview: NSViewRepresentable {
 
     func updateNSView(_ view: MTKView, context: Context) {
         context.coordinator.frame = frame
-        context.coordinator.mirrored = mirrored
         view.isPaused = paused
         if let tapView = view as? TapMTKView { bindTap(tapView, context.coordinator) }
     }
@@ -56,16 +54,15 @@ struct MetalPreview: NSViewRepresentable {
 
     final class Coordinator: NSObject, MTKViewDelegate {
         var frame: RenderedFrame?
-        var mirrored = true
         weak var view: MTKView?
 
         private var queue: MTLCommandQueue?
         private var pipeline: MTLRenderPipelineState?
         private var lastScale = SIMD2<Float>(1, 1)
+        private var lastMirrored = false
 
         struct Uniforms {
             var scale: SIMD2<Float>
-            var mirror: Int32
         }
 
         func configure(device: MTLDevice?) {
@@ -109,8 +106,9 @@ struct MetalPreview: NSViewRepresentable {
                 image: CGSize(width: texture.width, height: texture.height),
                 view: view.drawableSize)
             lastScale = scale
+            lastMirrored = frame.mirrored
 
-            var u = Uniforms(scale: scale, mirror: mirrored ? 1 : 0)
+            var u = Uniforms(scale: scale)
 
             enc.setRenderPipelineState(pipeline)
             enc.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
@@ -130,7 +128,7 @@ struct MetalPreview: NSViewRepresentable {
         /// reversing the fill-crop and the mirror.
         func viewPointToSensor(_ p: CGPoint) -> CGPoint {
             var x = Float(p.x), y = Float(p.y)
-            if mirrored { x = 1 - x }
+            if lastMirrored { x = 1 - x }
             x = (x - 0.5) * lastScale.x + 0.5
             y = (y - 0.5) * lastScale.y + 0.5
             return CGPoint(x: CGFloat(min(max(x, 0), 1)),

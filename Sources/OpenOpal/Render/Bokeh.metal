@@ -28,6 +28,7 @@ struct BokehUniforms {
     int    apertureBlades;  // 0 = circular, 6 = hexagonal
     float  matteStrength;   // how hard the subject matte pins the subject sharp
     int    useDepth;        // 0 = uniform blur behind the subject (mask only)
+    int    mirrorOutput;
 };
 
 constant float PI = 3.14159265359;
@@ -343,7 +344,8 @@ kernel void composite(texture2d<float, access::sample> sharpTex [[texture(0)]],
     float mixAmt = smoothstep(0.5, 2.5, coc);
     float3 lin = mix(sharp, blur, mixAmt);
 
-    out.write(float4(linearToSrgb(saturate(lin)), 1.0), gid);
+    uint2 destination = u.mirrorOutput != 0 ? uint2(w - 1 - gid.x, gid.y) : gid;
+    out.write(float4(linearToSrgb(saturate(lin)), 1.0), destination);
 }
 
 // ---------------------------------------------------------------------------
@@ -354,15 +356,12 @@ kernel void composite(texture2d<float, access::sample> sharpTex [[texture(0)]],
 // frame with an aspect-preserving *fill* (crop the overflowing axis rather than
 // pad it), so the preview always covers the window edge to edge.
 //
-// Mirroring happens here, and only here: a webcam preview should read like a
-// mirror, but the image sent to other people must NOT be mirrored or their text
-// comes out backwards. Keeping the flip in the preview path means the virtual
-// camera can share every earlier stage and still go out the right way round.
+// Mirroring is already baked into the shared frame. Presentation only crops
+// and scales it, so the preview and virtual camera keep the same orientation.
 // ---------------------------------------------------------------------------
 
 struct PreviewUniforms {
     float2 scale;     // uv scale for aspect-fill
-    int    mirror;
 };
 
 struct PreviewVertex {
@@ -385,7 +384,6 @@ vertex PreviewVertex preview_vertex(uint vid [[vertex_id]],
     // Zoom about the centre so the short axis fills and the long axis crops.
     uv = (uv - 0.5) * u.scale + 0.5;
 
-    if (u.mirror != 0) uv.x = 1.0 - uv.x;
 
     out.uv = uv;
     return out;

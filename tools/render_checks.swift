@@ -421,37 +421,127 @@ struct RenderChecks {
     }
 
     @MainActor
-    static func checkCombinedFilters(settings: CameraSettings) async {
-        let input = checkerInput()
-        let renderer = BokehRenderer()!
-        let pool = AnalysisTexturePool(device: MTLCreateSystemDefaultDevice()!, format: .r8Unorm, capacity: 1)
-        let background = analysisMatte(pool, value: 0)
-        settings.filter = .none
-        settings.filterIntensity = 1
-        settings.bokehEnabled = false
-        let sharp = autoreleasepool {
-            pixels(renderer.render(pixelBuffer: input, settings: RenderSettings(settings),
-                                   captureGeneration: renderer.captureGeneration)!.pixelBuffer)
+    static func checkSharedMirroring(settings: CameraSettings) async {
+        let input = nv12()
+        CVPixelBufferLockBaseAddress(input, [])
+        let width = CVPixelBufferGetWidth(input), height = CVPixelBufferGetHeight(input)
+        let stride = CVPixelBufferGetBytesPerRowOfPlane(input, 0)
+        let luma = CVPixelBufferGetBaseAddressOfPlane(input, 0)!.assumingMemoryBound(to: UInt8.self)
+        for y in 0..<height {
+            for x in 0..<width { luma[y * stride + x] = UInt8(16 + (x * 3 + y * 5) % 220) }
         }
-        settings.bokehEnabled = true
-        settings.syncBokeh = true
-        settings.uniformBlur = true
-        settings.aperture = 1.4
-        let blurred = await pairedPixels(renderer, input: input, matte: background, settings: settings)
-        require(blurred != sharp, "Combined filter fixture must run actual background blur")
-        settings.filter = .warm
-        settings.animateFilters = false
-        let filtered = await pairedPixels(renderer, input: input, matte: background, settings: settings)
-        require(filtered != blurred && filtered[2] > filtered[0],
-                "Warm filter must change the completed background-blur output")
-        settings.filterIntensity = 0
-        let bypassed = await pairedPixels(renderer, input: input, matte: background, settings: settings)
-        require(bypassed == blurred, "Zero filter intensity must preserve the blurred frame")
-        settings.filterIntensity = 1
-        renderer.resetCaptureState()
-        let restarted = await pairedPixels(renderer, input: input, matte: background, settings: settings)
-        require(restarted == filtered, "Capture restart must preserve the chosen filter without old history")
-        print("PASS: actual paired-frame blur plus filters, intensity bypass, and filtered capture restart")
+        CVPixelBufferUnlockBaseAddress(input, [])
+        let captured = InputFrame(buffer: input)
+        let device = MTLCreateSystemDefaultDevice()!
+        let library = device.makeDefaultLibrary()!
+        let descriptor = MTLRenderPipelineDescriptor()
+        descriptor.vertexFunction = library.makeFunction(name: "preview_vertex")
+        descriptor.fragmentFunction = library.makeFunction(name: "preview_fragment")
+        descriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
+        let pipeline = try! await device.makeRenderPipelineState(descriptor: descriptor)
+        let queue = device.makeCommandQueue()!
+        let surfaceDescriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: false)
+        surfaceDescriptor.storageMode = .shared
+        surfaceDescriptor.usage = [.renderTarget]
+        let surface = device.makeTexture(descriptor: surfaceDescriptor)!
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].texture = surface
+        pass.colorAttachments[0].loadAction = .dontCare
+        pass.colorAttachments[0].storeAction = .store
+        let renderer = BokehRenderer()!
+        let pool = AnalysisTexturePool(device: device, format: .r8Unorm, capacity: 1)
+        let background = analysisMatte(pool, value: 0)
+        for bokeh in [false, true] {
+            settings.bokehEnabled = bokeh
+            settings.syncBokeh = true
+            settings.uniformBlur = true
+            settings.aperture = 1.4
+            @MainActor func renderFrame() async -> RenderedFrame {
+                let generation = renderer.captureGeneration
+                let prepared = bokeh
+                    ? await renderer.analyzeNow(pixelBuffer: captured.buffer, needsDepth: false,
+                                                captureGeneration: generation) : nil
+                let paired = prepared.map {
+                    BokehRenderer.FrameAnalysis(pixelBuffer: input, generation: $0.generation,
+                                                depth: nil, matte: background, subject: nil)
+                }
+                return renderer.render(pixelBuffer: input, settings: RenderSettings(settings),
+                                       captureGeneration: generation, analysisForFrame: paired)!
+            }
+            settings.mirrorOutput = false
+            let straight = await renderFrame()
+            let original = pixels(straight.pixelBuffer)
+            settings.mirrorOutput = true
+            let mirrored = await renderFrame()
+            let flipped = pixels(mirrored.pixelBuffer)
+            require(original != flipped && !straight.mirrored && mirrored.mirrored,
+                    "Asymmetric pixels and focus-coordinate metadata must reflect the mirror setting")
+            for y in 0..<height {
+                for x in 0..<width {
+                    for channel in 0..<4 {
+                        require(flipped[(y * width + x) * 4 + channel] ==
+                                original[(y * width + width - 1 - x) * 4 + channel],
+                                "Shared mirror must reverse complete rows, with or without bokeh")
+                    }
+                }
+            }
+            for frame in [straight, mirrored] {
+                let command = queue.makeCommandBuffer()!
+                let encoder = command.makeRenderCommandEncoder(descriptor: pass)!
+                var uniforms = MetalPreview.Coordinator.Uniforms(scale: SIMD2(1, 1))
+                encoder.setRenderPipelineState(pipeline)
+                encoder.setVertexBytes(&uniforms, length: MemoryLayout<MetalPreview.Coordinator.Uniforms>.stride, index: 0)
+                encoder.setFragmentTexture(frame.texture, index: 0)
+                encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+                encoder.endEncoding()
+                command.commit()
+                await command.completed()
+                require(command.status == .completed &&
+                        texturePixels(surface) == pixels(frame.pixelBuffer),
+                        "The real preview shader must display the same pixels as virtual-camera delivery")
+            }
+        }
+        settings.mirrorOutput = false
+        settings.bokehEnabled = false
+        print("PASS: shared mirror, bokeh mirror, frame metadata and actual preview-shader orientation")
+    }
+
+    static func pixel(_ buffer: CVPixelBuffer, x: Int, y: Int) -> SIMD4<UInt8> {
+        CVPixelBufferLockBaseAddress(buffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+        let offset = y * CVPixelBufferGetBytesPerRow(buffer) + x * 4
+        let bytes = CVPixelBufferGetBaseAddress(buffer)!.assumingMemoryBound(to: UInt8.self) + offset
+        return SIMD4(bytes[0], bytes[1], bytes[2], bytes[3])
+    }
+
+    @MainActor
+    static func checkVirtualOutput(settings: CameraSettings) {
+        let renderer = BokehRenderer()!
+        let converter = VirtualCameraFrameConverter()
+        for size in [(320, 180), (3840, 2160), (320, 320)] {
+            autoreleasepool {
+                let frame = renderer.render(pixelBuffer: nv12(width: size.0, height: size.1, cb: 100, cr: 155),
+                                            settings: RenderSettings(settings),
+                                            captureGeneration: renderer.captureGeneration)!
+                let converted = converter.convert(frame.pixelBuffer)!
+                require(CVPixelBufferGetWidth(converted) == 1920 &&
+                        CVPixelBufferGetHeight(converted) == 1080 &&
+                        CVPixelBufferGetPixelFormatType(converted) == kCVPixelFormatType_32BGRA,
+                        "Virtual output must keep its advertised 1080p BGRA format")
+                let expected = pixel(frame.pixelBuffer, x: size.0 / 2, y: size.1 / 2)
+                let actual = pixel(converted, x: 960, y: 540)
+                for channel in 0..<4 {
+                    require(abs(Int(expected[channel]) - Int(actual[channel])) <= 2,
+                            "Scaling must preserve the rendered image colors")
+                }
+                if size.0 == size.1 {
+                    require(pixel(converted, x: 0, y: 540) == SIMD4(0, 0, 0, 255),
+                            "Square input must have opaque black side bars, not stretch")
+                }
+            }
+        }
+        print("PASS: 720p-sized, 4K and square input conversion, image colors and letterboxing")
     }
 
     @MainActor
@@ -496,6 +586,7 @@ struct RenderChecks {
         checkAnalysisStorage()
         await checkAnalysisTransitions(settings: settings)
         await checkProductionHistory(settings: settings)
-        await checkCombinedFilters(settings: settings)
+        await checkSharedMirroring(settings: settings)
+        checkVirtualOutput(settings: settings)
     }
 }

@@ -11,27 +11,28 @@ Composer software; Open Opal keeps the camera working, and adds a few things.
 - Lives in the menu bar; drag to float, then release near the menu bar to dock
 - About 45 ms from lens to screen
 
-## Fork branches
+## Development branches
 
-`main` starts from upstream and accepts individually reviewed and tested PRs.
-`develop` combines the feature branches for integration testing, including the
-previous `main` history. Do not merge `develop` wholesale into `main`.
+`develop` is the production-only integration branch for build, camera, rendering,
+and window-docking fixes. `filter-effects` is reserved for `develop` plus
+experimental filters and Generate & Edit; they are not in this build.
+`main` accepts individually reviewed changes, not a wholesale merge of `develop`.
+This build requires Apple silicon and macOS 26.
 
-`develop` combines the five build, camera, rendering, and docking fixes with the
-experimental filters and Generate & Edit. It requires macOS 26, including when
-editing manually. Main remains unchanged. Signed virtual-camera output still
-needs a live check.
+Production build 7 passes the camera-free settings, stream-policy, and GPU checks.
+Shared mirroring and 1080p conversion are verified with synthetic frames; live
+camera and receiving-app acceptance still require the checks below.
 
 ## Install
-To test the combined local build, quit any running OpenOpal first. From this
-worktree, launch the side build rather than the installed app:
+Local virtual-camera builds use Developer ID signing and notarization. Quit any
+running copy before launching the installed app:
 
 ```sh
-open build/develop-live/Build/Products/Release/OpenOpal.app
+open /Applications/OpenOpal.app
 ```
 
-This build has a local ad-hoc signature. It does not replace `/Applications/OpenOpal.app`
-and cannot install or feed the signed virtual-camera extension.
+Keep the app in `/Applications` so macOS can activate its camera extension.
+See [SIGNING.md](docs/SIGNING.md) to rebuild and notarize local changes.
 
 
 ## Features
@@ -41,11 +42,10 @@ and cannot install or feed the signed virtual-camera extension.
 - White balance: presets or manual Kelvin
 - Anti-banding for 50/60 Hz lighting
 - Sharpness, denoise, brightness, contrast, saturation
-- 4K / 1080p / 720p, up to 42 fps
+- Sensor capture: 4K / 1080p / 720p, up to 42 fps; virtual camera advertises 1080p30
 - Background blur, rendered in Metal with Apple's Vision segmentation
 - Optional exposure metering on your face instead of the whole frame
-- 21 local Metal effects plus None, with categorized search, intensity, and
-  optional effect animation; face-tracked looks use Apple's Vision landmarks
+- Mirror output: one shared horizontal flip for preview and virtual camera
 - Menu bar controls with a live preview and an icon-aligned pointer
 - Drag the header to float and resize; drop near the menu bar icon to dock
 
@@ -55,9 +55,16 @@ switches between docked and floating controls. Clicking away hides docked contro
 floating controls stay open. Escape hides either without disconnecting the camera.
 Click the icon to reopen them. Right-click the icon to quit.
 
-Camera controls, capture size, blur, and autofocus limits survive app restarts.
-Reset All also clears saved autofocus choices. Existing saved settings inherit
-defaults for fields they do not contain.
+Camera controls, capture size, blur, Mirror output, and autofocus limits survive
+app restarts. Mirror output defaults to off and applies once in the final Metal
+composite; the preview does not add another flip. Reset All restores every
+production image setting, including capture format, blur, Mirror output, and
+autofocus choices. Capture format changes remain pending until camera restart.
+Older saved settings inherit missing defaults.
+
+Freeze Preview pauses only the local display, not capture or virtual output.
+Window layout and Show Advanced affect only the app; capture format changes
+require a restart, and manual or blur controls apply only in their enabled mode.
 
 Download the latest DMG from [Releases](https://github.com/alii/open-opal/releases)
 and drag Open Opal to Applications. Click the lens icon in the menu bar to
@@ -96,6 +103,11 @@ open OpenOpal.xcodeproj
 
 Building needs Xcode 26 or newer. See [TECHNICAL.md](TECHNICAL.md) for details,
 tests, and how the camera takeover works.
+
+Build identity is defined in `Config/BuildIdentity.xcconfig`, with an optional
+ignored `Config/BuildIdentity.local.xcconfig` for your team, host bundle ID, and
+App Group. Tracked defaults are unsigned development placeholders. See
+[SIGNING.md](docs/SIGNING.md) before building against existing signing profiles.
 
 Use Release builds for day-to-day use — Debug builds noticeably stutter in UI
 animations.
@@ -154,10 +166,13 @@ The C1's flash holds firmware that presents it as a standard UVC webcam —
 that's why it works in any app with nothing installed. Open Opal takes the
 camera over instead: it resets the VPU into its ROM bootloader, uploads the
 ~26 MB DepthAI firmware into the camera's **RAM**, and sends over a small
-pipeline graph that the firmware instantiates on the VPU. Quitting reboots
-the camera back to its stock firmware within a few seconds. Nothing is ever
-written to flash, so the takeover can't brick anything. The app narrates
-each stage live while connecting, with real sizes and timings.
+pipeline graph that the firmware instantiates on the VPU. Quitting attempts to
+return the camera to its stock firmware. Nothing is written to flash. The app
+shows each connecting stage with sizes and timings.
+
+The physical C1 light can remain off during capture with this RAM-loaded
+pipeline. Do not use it as a privacy indicator; unplug the camera for a hardware
+guarantee that it is off.
 
 For first-generation IMX378 C1s, the stock camera must present both video and
 audio interfaces before Open Opal attempts the handoff. Every reconnect must
@@ -172,7 +187,7 @@ Myriad X (IMX582)
                                                               │
                               IOSurface CVPixelBuffer ◄───────┘  (the only copy)
                                         │
-              Metal: NV12 → linear RGB → mask → blur → composite → filter
+              Metal: NV12 → linear RGB → mask → blur → composite + optional mirror
                                         │
                     owned BGRA frame → preview + virtual camera
 ```
@@ -184,86 +199,47 @@ of queuing latency. An optional depth-graded mode uses
 [Depth Anything V2](https://huggingface.co/apple/coreml-depth-anything-v2-small)
 for distance-based falloff.
 
-## Camera filters
+## Headless checks
 
-The inspector's Filters browser has 21 effects plus None, grouped into four
-categories. Search or page through six cards at a time. Selected-effect controls
-stay above the catalog, including intensity and an animation switch where useful.
-Changing a filter never reboots the camera.
-
-| Category | Effects |
-| --- | --- |
-| Portrait | Cowboy, Cat, Beauty, Cyber Warrior, Baby Face, Anime Face, Beard, Glam Hair, Sunglasses, Bearded Cowboy |
-| Color | Monochrome, Warm, Thermal |
-| Art | Anime Ink, Halftone, Blueprint, Risograph |
-| Digital | Point Cloud, Glitch, Pixel Art, Hologram |
-
-Portrait effects use Apple's Vision face landmarks locally. The other effects
-need no face tracking. Missing or stale detections remove face attachments.
-Intensity zero bypasses the filter pass and face analysis. Disabling animation
-holds shader time fixed; video and face tracking continue.
-
-All artwork is procedural. Cat and Cyber Warrior are 2D face decorations, not
-full avatars. Anime Ink is cel shading and edge drawing, not generative face
-replacement. Point Cloud is a 2D dot visualization, not reconstructed depth.
-Thermal maps brightness to false color and cannot measure temperature.
-Beauty softens the face without geometric reshaping. Baby Face and Anime Face
-enlarge facial features with local warps, not photorealistic age or character
-replacement. Beard and Glam Hair are illustrated accessories for anyone, not
-gender transformations. Bearded Cowboy combines the beard and existing hat.
-
-Effects run after background blur in one Metal pass and reach both the preview
-and virtual camera. Only the preview is mirrored. Spatial patterns scale with
-resolution; animated effects use bounded, explicit time rather than frame counts.
-
-No Snap lenses, extra downloaded models, cloud calls, or camera uploads are
-involved. Snap's proprietary lens archive is not a portable renderer format.
-See [PLAN.md](PLAN.md) for compatibility research. The
-[agent authoring spec](docs/FILTER_AUTHORING.md) documents shader contracts,
-acceptance checks, and the native Generate & Edit panel. Describe a look using
-Apple's on-device Foundation Models, or edit a draft manually when the model is
-unavailable. Generation selects existing effects, not new shaders or artwork.
-
-Review the draft's look, intensity, and motion, or preview it on a synthetic face.
-**Apply to output** updates preview and virtual camera together. Revert discards
-draft edits; Undo restores the previous active look. Save draft writes validated
-JSON presets locally under `~/Library/Application Support/OpenOpal/FilterPresets`
-without applying them. Saved presets load into the draft for review.
-
-Model output can misunderstand a request. Review the selected look and its
-catalog description before applying. Arbitrary stacking, custom colors, and
-photorealistic transformations are not supported. Generation never uploads
-camera frames, downloads extra weights, or falls back to a remote model.
-
-This branch requires a user-approved live review before release. Camera-free
-compiler and synthetic-frame checks do not establish tracking quality, sustained
-frame rate, or output in Zoom/Meet. Do not launch a new build while another app
-is using the C1.
-
-Camera-free regression checks:
+Use the installed signed app for the integrated camera checks:
 
 ```sh
-bash scripts/check-filters.sh
+bash scripts/check-camera.sh /Applications/OpenOpal.app
 ```
 
-This compiles the Metal shaders and a standalone Swift executable, then checks
-generated frames, synthetic face anchors, portrait warps and mouth protection,
-catalog search, time determinism, animation-off behavior, intensity, tiny/odd
-image sizes, output ownership, and virtual-output conversion. It never starts Open Opal, opens a
-capture device, or connects to the virtual-camera extension.
+This checks isolated preferences and the synthetic renderer without opening USB,
+capturing video, registering the helper, or activating the extension.
+
+The following command **takes over the physical C1**, using the RAM-only
+pipeline. Warn anyone using the camera and stop competing camera apps first:
+
+```sh
+bash scripts/check-camera.sh /Applications/OpenOpal.app --live-takeover
+```
+
+It exercises capture modes and frame rates, orientation, hot controls, software
+reconnect/restart, and virtual-camera readback where permission is already
+granted. It writes numeric JSON-lines evidence, not recorded pixels, and leaves
+saved user controls unchanged. Exit 1 means failure; exit 2 means evidence is
+still unverified, including optical/chart checks, physical unplug/replug, GUI
+behavior, or missing prior camera permission. Software restart is not evidence
+of a successful physical reconnect. These commands are instructions, not a
+claim that the replacement build has passed them.
+
 
 ## Virtual camera
 
 Open Opal installs a CoreMediaIO system extension that publishes **"Open Opal
 Camera"** to every app on the Mac — Zoom, Meet, FaceTime, anything. It carries
-the processed image, background blur and filters included. When the app isn't running it
+the processed image, including background blur and the shared Mirror output setting. When the app isn't running it
 shows a camera-off symbol rather than a frozen frame. The fallback contains no
 text, so it stays understandable in mirrored self-views and in the normal video
 other participants receive.
 
-Virtual-camera output is always 1920×1080 BGRA, matching the extension's
-advertised format. Other input sizes are scaled to fit with black bars rather
-than stretched; native 1080p BGRA frames pass through without an extra copy.
+The virtual camera advertises **1920×1080 BGRA at 30 fps**, regardless of sensor
+capture settings. Actual frame delivery depends on capture and rendering speed.
+Other input sizes are scaled to fit with black bars rather than stretched;
+native 1080p BGRA frames pass through without an extra conversion copy.
 
 Installing it requires a signed and notarized build; see
 [docs/SIGNING.md](docs/SIGNING.md). The app itself runs fine unsigned.
@@ -282,7 +258,9 @@ or reopen OpenOpal, to start again. Camera startup still takes a few seconds.
 
 ## Status
 
-Working: camera control, live preview, background blur, local filters, virtual camera.
+Production scope: camera controls, live preview, background blur, shared Mirror
+output, window docking, and the virtual camera. Settings stress and reconnect
+evidence must come from the rebuilt app, not earlier experimental checks.
 
 ## License
 

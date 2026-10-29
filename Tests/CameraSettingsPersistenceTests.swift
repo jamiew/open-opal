@@ -20,7 +20,7 @@ struct CameraSettingsPersistenceTests {
         initial.antiBanding = .hz50
         initial.outputMode = .hd720
         initial.fps = 40
-        initial.mirrorPreview = false
+        initial.mirrorOutput = true
         initial.showAdvanced = true
         initial.meterOnSubject = true
         precondition(initial.coldDirty)
@@ -32,7 +32,7 @@ struct CameraSettingsPersistenceTests {
         precondition(restored.manualWhiteBalance && restored.whiteBalanceK == 4200)
         precondition(restored.antiBanding == .hz50 && restored.meterOnSubject)
         precondition(restored.outputMode == .hd720 && restored.fps == 40)
-        precondition(!restored.mirrorPreview && restored.showAdvanced && !restored.coldDirty)
+        precondition(restored.mirrorOutput && restored.showAdvanced && !restored.coldDirty)
 
         restored.reset()
         precondition(!restored.meterOnSubject && restored.antiBanding == .hz60)
@@ -40,6 +40,9 @@ struct CameraSettingsPersistenceTests {
         precondition(!reset.manualFocus && reset.lensPosition == 120 && reset.brightness == 0)
         precondition(reset.autoExposure && reset.exposureUs == 8000)
         precondition(!reset.meterOnSubject && reset.antiBanding == .hz60)
+        precondition(reset.outputMode == defaults.outputMode && reset.fps == defaults.fps)
+        precondition(!reset.mirrorOutput && restored.coldDirty,
+                     "Reset must clear image mirroring and leave format changes pending")
 
         // Blur-only changes must save immediately, without another camera
         // control change accidentally triggering the write for them.
@@ -70,10 +73,11 @@ struct CameraSettingsPersistenceTests {
 
         restoredBlur.resetBokeh()
         let resetBlur = CameraSettings(preferences: preferences)
-        precondition(abs(resetBlur.blurAmount - 0.7) < 0.000001)
+        precondition(!resetBlur.bokehEnabled && resetBlur.aperture == defaults.aperture)
         precondition(resetBlur.uniformBlur && resetBlur.syncBokeh && resetBlur.matteQuality == .accurate)
-        resetBlur.bokehEnabled = false
-        precondition(!CameraSettings(preferences: preferences).bokehEnabled)
+        precondition(resetBlur.focusDistance == defaults.focusDistance && resetBlur.autoFocusSubject)
+        precondition(resetBlur.apertureShape == defaults.apertureShape &&
+                     resetBlur.highlightBloom == defaults.highlightBloom)
 
         let effects = CameraSettings(preferences: preferences)
         effects.focusOnSubject = true
@@ -84,17 +88,6 @@ struct CameraSettingsPersistenceTests {
         precondition(CameraSettings(preferences: preferences).afRangeInfinity == 70)
         effects.afRangeMacro = 180
         precondition(CameraSettings(preferences: preferences).afRangeMacro == 180)
-        effects.filter = .glitch
-        effects.filterIntensity = 0.35
-        effects.animateFilters = false
-        let restoredFilter = CameraSettings(preferences: preferences)
-        precondition(restoredFilter.filter == .glitch && restoredFilter.filterIntensity == 0.35)
-        precondition(!restoredFilter.animateFilters && restoredFilter.limitAfRange)
-        restoredFilter.resetFilters()
-        let resetFilter = CameraSettings(preferences: preferences)
-        precondition(resetFilter.filter == defaults.filter)
-        precondition(resetFilter.filterIntensity == defaults.filterIntensity)
-        precondition(resetFilter.animateFilters == defaults.animateFilters && resetFilter.limitAfRange)
         effects.reset()
         let resetEffects = CameraSettings(preferences: preferences)
         precondition(!resetEffects.focusOnSubject && !resetEffects.limitAfRange)
@@ -154,11 +147,9 @@ struct CameraSettingsPersistenceTests {
         }
         let boundaryRange = restore(#"{"version":1,"afRangeInfinity":0,"afRangeMacro":255}"#)
         precondition(boundaryRange.afRangeInfinity == 0 && boundaryRange.afRangeMacro == 255)
-        let removedFilter = restore(#"{"version":1,"filter":"removed-look","brightness":3}"#)
-        precondition(removedFilter.filter == defaults.filter && removedFilter.brightness == 3)
-        let invalidIntensity = restore(#"{"version":1,"filter":"warm","filterIntensity":2,"brightness":3}"#)
-        precondition(invalidIntensity.filter == .warm && invalidIntensity.filterIntensity == defaults.filterIntensity)
-        precondition(invalidIntensity.brightness == 3)
+        let legacy = restore(#"{"version":1,"mirrorPreview":true,"filter":"warm","filterIntensity":1,"brightness":3}"#)
+        precondition(!legacy.mirrorOutput && legacy.brightness == 3,
+                     "A preview-only preference must not start mirroring outgoing video")
         for json in ["not JSON", #"{"version":1,"lensPosition":"wrong type"}"#,
                      #"{"version":1,"afMode":"unknown"}"#,
                      #"{"version":2,"brightness":4}"#] {
