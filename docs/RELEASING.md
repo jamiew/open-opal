@@ -88,6 +88,13 @@ authorization, followed by the synthetic renderer and the app's isolated
 settings persistence/cold-revision checks. It does not open a camera or activate
 the extension, and does not establish installed-extension or live-camera behavior.
 
+Automated virtual-camera readback needs prior camera consent. Request it explicitly,
+then approve the macOS dialog for Open Opal:
+
+```sh
+bash scripts/check-camera.sh /Applications/OpenOpal.app --request-camera-access
+```
+
 After warning camera users, the explicit live path is:
 
 ```sh

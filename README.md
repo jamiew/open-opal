@@ -19,9 +19,9 @@ experimental filters and Generate & Edit; they are not in this build.
 `main` accepts individually reviewed changes, not a wholesale merge of `develop`.
 This build requires Apple silicon and macOS 26.
 
-Production build 7 passes the camera-free settings, stream-policy, and GPU checks.
-Shared mirroring and 1080p conversion are verified with synthetic frames; live
-camera and receiving-app acceptance still require the checks below.
+Production build 8 passes the camera-free settings, stream-policy, and GPU checks.
+Live readback exposed a failure while switching to 720p; this build is not yet
+release-ready. Optical checks and physical unplug/replug also remain.
 
 ## Install
 Local virtual-camera builds use Developer ID signing and notarization. Quit any
@@ -209,6 +209,15 @@ bash scripts/check-camera.sh /Applications/OpenOpal.app
 
 This checks isolated preferences and the synthetic renderer without opening USB,
 capturing video, registering the helper, or activating the extension.
+
+For automated virtual-camera readback, request camera access once and approve
+the macOS dialog for Open Opal:
+
+```sh
+bash scripts/check-camera.sh /Applications/OpenOpal.app --request-camera-access
+```
+
+This mode requests permission only; it does not start capture or reset a denial.
 
 The following command **takes over the physical C1**, using the RAM-only
 pipeline. Warn anyone using the camera and stop competing camera apps first:

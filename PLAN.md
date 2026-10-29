@@ -35,8 +35,8 @@ reconnect is not a substitute for physically unplugging and reconnecting the C1.
 `Config/BuildIdentity.xcconfig` contains unsigned development defaults. The ignored
 `Config/BuildIdentity.local.xcconfig` holds the local team, host bundle ID, and
 App Group matching existing provisioning profiles. Derived extension and helper
-identifiers, Mach service, and signing entitlements must agree. Build version 7
-replaces version 6 for the host, camera extension, and launcher together.
+identifiers, Mach service, and signing entitlements must agree. Build version 8
+replaces version 7 for the host, camera extension, and launcher together.
 
 Keep the sealed host Info.plist in the camera extension and fail-closed dynamic
 process validation against the exact host ID and signing team. A Developer ID
@@ -82,5 +82,11 @@ and the real-GPU checks for shared pixels, mirror orientation, blur history,
 color output, frame lifetime, and virtual-output conversion. The signed executable
 also passed its isolated-preferences mode without opening the camera.
 
-Live optical, physical-reconnect, and GUI acceptance remains separate; do not call
-the integration release-ready from these camera-free results.
+Build 8 is signed, notarized and installed. Its seven Swift fixtures, GPU checks
+and isolated settings check passed. Live readback passed active controls, 4K
+capture at 15/30 fps and 1080p at 15/42 fps, then failed its fresh-content or
+timestamp guard during the switch to 720p at 15 fps. The current error does not
+identify which guard failed; do not call this integration release-ready.
+
+Further stress changes are paused for branch cleanup. Optical/chart checks,
+physical unplug/replug and full GUI acceptance remain unverified.

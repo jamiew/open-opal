@@ -43,14 +43,12 @@ targets:
         CFBundleDisplayName: Open Opal
         CFBundleIconFile: AppIcon
         CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "7"
+        CFBundleVersion: "8"
         LSMinimumSystemVersion: "26.0"
         LSUIElement: true
         NSHumanReadableCopyright: "Open source. Not affiliated with Opal Camera Inc."
-        # We drive the C1 over raw USB rather than as a capture device, so we
-        # don't need NSCameraUsageDescription for the camera itself — but the
-        # preview and any future AVFoundation fallback do.
-        NSCameraUsageDescription: "Open Opal needs access to your Opal C1 camera."
+        # Physical capture uses raw USB; AVFoundation readback needs consent.
+        NSCameraUsageDescription: "Open Opal needs camera access to verify its virtual-camera output."
         # Belongs on the APP (which requests the install), not the extension.
         NSSystemExtensionUsageDescription: "Open Opal installs a virtual camera so other apps can use your processed video."
         LSApplicationCategoryType: public.app-category.video
@@ -151,7 +149,7 @@ targets:
       properties:
         CFBundleDisplayName: Open Opal Camera
         CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "7"
+        CFBundleVersion: "8"
         # SYSX marks this bundle as a system extension. Without it, macOS scans
         # Contents/Library/SystemExtensions, fails to recognise the bundle, and
         # reports "Extension not found in App bundle" even though it's right there.
@@ -192,7 +190,7 @@ targets:
         CFBundleName: OpenOpal Launcher
         CFBundleDisplayName: OpenOpal Launcher
         CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "7"
+        CFBundleVersion: "8"
         LSMinimumSystemVersion: "26.0"
         LSUIElement: true
         NSSupportsAutomaticTermination: false

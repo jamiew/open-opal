@@ -24,6 +24,32 @@ enum CameraDiagnostics {
 
     static func run() async -> Int32 {
         let arguments = Array(CommandLine.arguments.dropFirst())
+        if arguments == ["--camera-checks-request-access"] {
+            do {
+                try requireSignedExecutable()
+                let granted: Bool
+                switch AVCaptureDevice.authorizationStatus(for: .video) {
+                case .authorized:
+                    granted = true
+                case .notDetermined:
+                    emit("camera-permission", "information",
+                         ["reason": "Approve the macOS camera-access dialog for Open Opal. No camera capture starts in this mode."])
+                    granted = await AVCaptureDevice.requestAccess(for: .video)
+                case .denied, .restricted:
+                    emit("camera-permission", "failed",
+                         ["reason": "Camera access is denied or restricted. Change it manually in System Settings; no reset or grant was attempted."])
+                    return 1
+                @unknown default:
+                    throw Failure("Unknown camera authorization state.")
+                }
+                emit("camera-permission", granted ? "passed" : "failed",
+                     ["scope": "Camera access only; no capture, installation or saved-settings changes."])
+                return granted ? 0 : 1
+            } catch {
+                emit("camera-permission", "failed", ["reason": String(describing: error)])
+                return 1
+            }
+        }
         let live = arguments.contains("--camera-checks-live")
         let allowed = Set(["--camera-checks", "--camera-checks-live", "--allow-camera-takeover"])
         guard arguments.allSatisfy(allowed.contains),

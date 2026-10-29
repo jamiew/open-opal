@@ -4,8 +4,8 @@
 # Camera-free regression fixtures are compiled into an isolated temporary folder.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-if [[ $# -lt 1 || $# -gt 2 || ( $# -eq 2 && "$2" != "--live-takeover" ) ]]; then
-    echo "Usage: bash scripts/check-camera.sh /path/to/OpenOpal.app [--live-takeover]" >&2
+if [[ $# -lt 1 || $# -gt 2 || ( $# -eq 2 && "$2" != "--live-takeover" && "$2" != "--request-camera-access" ) ]]; then
+    echo "Usage: bash scripts/check-camera.sh /path/to/OpenOpal.app [--live-takeover|--request-camera-access]" >&2
     exit 1
 fi
 APP="$1"
@@ -19,6 +19,10 @@ fi
 if /usr/bin/pgrep -x "$EXECUTABLE" >/dev/null; then
     echo "Quit $EXECUTABLE before running camera checks." >&2
     exit 1
+fi
+if [[ "${2:-}" == "--request-camera-access" ]]; then
+    /usr/bin/codesign --verify --strict "$APP"
+    exec "$BINARY" --camera-checks-request-access
 fi
 if [[ $# -eq 1 ]]; then
     WORK="$(mktemp -d "${TMPDIR:-/tmp}/openopal-camera-checks.XXXXXX")"
